@@ -37,6 +37,7 @@ using image_view                = handle<vk::ImageView>;
 using pipeline_layout           = handle<vk::PipelineLayout>;
 using pipeline                  = handle<vk::Pipeline>;
 using render_pass               = handle<vk::RenderPass>;
+using frame_buffer              = handle<vk::Framebuffer>;
 
 VkBool32 VKAPI_PTR log(VkDebugReportFlagsEXT      flags,
                        VkDebugReportObjectTypeEXT objectType_, uint64_t object,
@@ -94,6 +95,36 @@ size_t find_memory_index(const vk::PhysicalDeviceMemoryProperties &mem_caps,
     throw std::runtime_error("could not find an appropriate memory index");
 }
 
+auto get_memory_requirements(const device &dev, const buffer &b)
+{
+    return dev->getBufferMemoryRequirements(*b);
+}
+
+auto get_memory_requirements(const device &dev, const image &i)
+{
+    return dev->getImageMemoryRequirements(*i);
+}
+
+template <typename Resource>
+vkx::device_memory
+allocate(const device &dev, const vk::PhysicalDeviceMemoryProperties &mem_caps,
+         const Resource &resource, const vk::MemoryPropertyFlags &mem_props)
+{
+    auto memory_requirements = get_memory_requirements(dev, resource);
+    auto memory_index        = find_memory_index(
+        mem_caps, memory_requirements.memoryTypeBits, mem_props);
+
+    vk::MemoryAllocateInfo memory_allocate_info;
+    {
+        memory_allocate_info.setAllocationSize(memory_requirements.size)
+            .setMemoryTypeIndex(uint32_t(memory_index));
+    }
+    return make_handle(
+        dev->allocateMemory(memory_allocate_info), [device = dev](auto mem) {
+            device->freeMemory(mem);
+        });
+}
+
 std::pair<buffer, device_memory>
 create_buffer(const device &                            dev,
               const vk::PhysicalDeviceMemoryProperties &mem_caps, size_t size,
@@ -110,18 +141,7 @@ create_buffer(const device &                            dev,
             device->destroyBuffer(buffer);
         });
 
-    auto memory_requirements = dev->getBufferMemoryRequirements(*buffer_);
-    auto memory_index        = find_memory_index(
-        mem_caps, memory_requirements.memoryTypeBits, mem_props);
-
-    vk::MemoryAllocateInfo memory_allocate_info;
-    {
-        memory_allocate_info.setAllocationSize(memory_requirements.size)
-            .setMemoryTypeIndex(uint32_t(memory_index));
-    }
-    device_memory device_memory_ = make_handle(
-        dev->allocateMemory(memory_allocate_info),
-        [ device = dev, buffer_ ](auto mem) { device->freeMemory(mem); });
+    device_memory device_memory_ = allocate(dev, mem_caps, buffer_, mem_props);
 
     dev->bindBufferMemory(*buffer_, *device_memory_, 0);
 
@@ -369,7 +389,8 @@ int main(int argc, char **argv)
             .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
             .setDescriptorCount(1)
             .setStageFlags(vk::ShaderStageFlagBits::eVertex);
-        descriptor_set_layout_create_info.setBindingCount(uint32_t(bindings.size()))
+        descriptor_set_layout_create_info
+            .setBindingCount(uint32_t(bindings.size()))
             .setPBindings(bindings.data());
 
         vkx::descriptor_set_layout descriptor_set_layout = vkx::make_handle(
@@ -456,6 +477,30 @@ int main(int argc, char **argv)
             vkx::make_handle(device->createImage(image_create_info_positions),
                              [device](auto img) { device->destroyImage(img); });
 
+        vkx::device_memory positions_attachment_memory =
+            vkx::allocate(device, mem_caps, positions_attachment,
+                          vk::MemoryPropertyFlagBits::eDeviceLocal);
+        device->bindImageMemory(*positions_attachment, *positions_attachment_memory, 0);
+
+        vk::ImageSubresourceRange image_subresource_range_positions;
+        image_subresource_range_positions
+            .setAspectMask(vk::ImageAspectFlagBits::eColor)
+            .setBaseArrayLayer(0)
+            .setBaseMipLevel(0)
+            .setLayerCount(1)
+            .setLevelCount(1);
+
+        vk::ImageViewCreateInfo image_view_create_info_positions;
+        image_view_create_info_positions
+            .setFormat(image_create_info_positions.format)
+            .setImage(*positions_attachment)
+            .setViewType(vk::ImageViewType::e2D)
+            .setSubresourceRange(image_subresource_range_positions);
+
+        vkx::image_view image_view_positions = vkx::make_handle(
+            device->createImageView(image_view_create_info_positions),
+            [device](auto iv) { device->destroyImageView(iv); });
+
         vk::ImageCreateInfo image_create_info_depth;
         image_create_info_depth.setArrayLayers(1)
             .setExtent(vk::Extent3D(512, 512, 1))
@@ -471,6 +516,29 @@ int main(int argc, char **argv)
         vkx::image depth_attachment =
             vkx::make_handle(device->createImage(image_create_info_depth),
                              [device](auto img) { device->destroyImage(img); });
+
+        vkx::device_memory depth_attachment_memory =
+            vkx::allocate(device, mem_caps, depth_attachment,
+                vk::MemoryPropertyFlagBits::eDeviceLocal);
+        device->bindImageMemory(*depth_attachment, *depth_attachment_memory, 0);
+
+        vk::ImageSubresourceRange image_subresource_range_depth;
+        image_subresource_range_depth
+            .setAspectMask(vk::ImageAspectFlagBits::eDepth)
+            .setBaseArrayLayer(0)
+            .setBaseMipLevel(0)
+            .setLayerCount(1)
+            .setLevelCount(1);
+
+        vk::ImageViewCreateInfo image_view_create_info_depth;
+        image_view_create_info_depth.setFormat(image_create_info_depth.format)
+            .setImage(*depth_attachment)
+            .setViewType(vk::ImageViewType::e2D)
+            .setSubresourceRange(image_subresource_range_depth);
+
+        vkx::image_view image_view_depth = vkx::make_handle(
+            device->createImageView(image_view_create_info_depth),
+            [device](auto iv) { device->destroyImageView(iv); });
 
         ////////////////////////////////////////////////////////////////
         //  Pipeline
@@ -570,9 +638,6 @@ int main(int argc, char **argv)
         pipeline_input_assembly_state_create_info.setTopology(
             vk::PrimitiveTopology::eTriangleList);
 
-        // vk::PipelineTessellationStateCreateInfo
-        // pipeline_tessellation_state_create_info;
-
         vk::Viewport viewport;
         viewport.setX(0)
             .setY(0)
@@ -614,8 +679,8 @@ int main(int argc, char **argv)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
+            .setInitialLayout(vk::ImageLayout::eColorAttachmentOptimal)
+            .setFinalLayout(vk::ImageLayout::eTransferSrcOptimal);
 
         vk::AttachmentReference attachment_reference_position_rt;
         attachment_reference_position_rt.setAttachment(0).setLayout(
@@ -627,15 +692,12 @@ int main(int argc, char **argv)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setInitialLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
         vk::AttachmentReference attachment_reference_depth;
         attachment_reference_depth.setAttachment(1).setLayout(
             vk::ImageLayout::eDepthStencilAttachmentOptimal);
-
-        std::array<vk::AttachmentReference, 2> input_attachments = {
-            attachment_reference_position_rt, attachment_reference_depth};
 
         std::array<vk::AttachmentReference, 1> color_attachments = {
             attachment_reference_position_rt};
@@ -646,35 +708,9 @@ int main(int argc, char **argv)
         vk::SubpassDescription subpass_description;
         subpass_description
             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-            .setInputAttachmentCount(uint32_t(input_attachments.size()))
-            .setPInputAttachments(input_attachments.data())
             .setColorAttachmentCount(uint32_t(color_attachments.size()))
             .setPColorAttachments(color_attachments.data())
             .setPDepthStencilAttachment(&attachment_reference_depth);
-
-        // std::array<vk::SubpassDependency, 2> subpass_dependencies;
-        // subpass_dependencies[0]
-        //    .setSrcSubpass(VK_SUBPASS_EXTERNAL)
-        //    .setDstSubpass(0)
-        //    .setSrcStageMask(vk::PipelineStageFlagBits::eBottomOfPipe)
-        //    .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-        //    .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
-        //    .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
-        //                      vk::AccessFlagBits::eColorAttachmentWrite |
-        //                      vk::AccessFlagBits::eDepthStencilAttachmentRead
-        //                      |
-        //                      vk::AccessFlagBits::eDepthStencilAttachmentWrite);
-        // subpass_dependencies[1]
-        //    .setSrcSubpass(0)
-        //    .setDstSubpass(VK_SUBPASS_EXTERNAL)
-        //    .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-        //    .setDstStageMask(vk::PipelineStageFlagBits::eBottomOfPipe)
-        //    .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
-        //                      vk::AccessFlagBits::eColorAttachmentWrite |
-        //                      vk::AccessFlagBits::eDepthStencilAttachmentRead
-        //                      |
-        //                      vk::AccessFlagBits::eDepthStencilAttachmentWrite)
-        //    .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
 
         vk::RenderPassCreateInfo render_pass_create_info;
         render_pass_create_info
@@ -682,8 +718,6 @@ int main(int argc, char **argv)
             .setPAttachments(attachment_descriptions.data())
             .setSubpassCount(1)
             .setPSubpasses(&subpass_description)
-            //.setDependencyCount(subpass_dependencies.size())
-            //.setPDependencies(subpass_dependencies.data())
             ;
         vkx::render_pass render_pass = vkx::make_handle(
             device->createRenderPass(render_pass_create_info),
@@ -706,6 +740,23 @@ int main(int argc, char **argv)
             device->createGraphicsPipeline(vk::PipelineCache(),
                                            graphics_pipeline_create_info),
             [device](auto p) { device->destroyPipeline(p); });
+
+        ////////////////////////////////////////////////////////////////
+        //  Frame buffer
+        std::array<vk::ImageView, 2> image_views = {*image_view_positions,
+                                                    *image_view_depth};
+
+        vk::FramebufferCreateInfo framebuffer_create_info;
+        framebuffer_create_info.setAttachmentCount(uint32_t(image_views.size()))
+            .setPAttachments(image_views.data())
+            .setLayers(1)
+            .setRenderPass(*render_pass)
+            .setWidth(512)
+            .setHeight(512);
+
+        vkx::frame_buffer frame_buffer = vkx::make_handle(
+            device->createFramebuffer(framebuffer_create_info),
+            [device](auto fb) { device->destroyFramebuffer(fb); });
 
     } // try
     catch (const std::exception &e)
