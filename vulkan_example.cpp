@@ -607,17 +607,22 @@ int main(int argc, char **argv)
         pipeline_color_blend_state_create_info.setAttachmentCount(1)
             .setPAttachments(&pipeline_color_blend_attachment_state);
 
-        std::array<vk::AttachmentDescription, 2> attachment_descriptions;
-        attachment_descriptions[0]
+        vk::AttachmentDescription attachment_description_position_rt;
+        attachment_description_position_rt
             .setFormat(vk::Format::eR32G32B32A32Sfloat)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
             .setInitialLayout(vk::ImageLayout::eColorAttachmentOptimal)
-            .setFinalLayout(vk::ImageLayout::eGeneral);
-        attachment_descriptions[1]
-            .setFormat(vk::Format::eD32Sfloat)
+            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
+
+        vk::AttachmentReference attachment_reference_position_rt;
+        attachment_reference_position_rt.setAttachment(0).setLayout(
+            vk::ImageLayout::eColorAttachmentOptimal);
+
+        vk::AttachmentDescription attachment_description_depth;
+        attachment_description_depth.setFormat(vk::Format::eD32Sfloat)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
@@ -625,20 +630,27 @@ int main(int argc, char **argv)
             .setInitialLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
-        std::array<vk::AttachmentReference, 2> attachment_references;
-        attachment_references[0].setAttachment(0).setLayout(
-            vk::ImageLayout::eColorAttachmentOptimal);
-        attachment_references[1].setAttachment(1).setLayout(
+        vk::AttachmentReference attachment_reference_depth;
+        attachment_reference_depth.setAttachment(1).setLayout(
             vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+        std::array<vk::AttachmentReference, 2> input_attachments = {
+            attachment_reference_position_rt, attachment_reference_depth};
+
+        std::array<vk::AttachmentReference, 1> color_attachments = {
+            attachment_reference_position_rt};
+
+        std::array<vk::AttachmentDescription, 2> attachment_descriptions = {
+            attachment_description_position_rt, attachment_description_depth};
 
         vk::SubpassDescription subpass_description;
         subpass_description
             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-            .setInputAttachmentCount(attachment_references.size())
-            .setPInputAttachments(attachment_references.data())
-            .setColorAttachmentCount(1)
-            .setPColorAttachments(&attachment_references[0])
-            .setPDepthStencilAttachment(&attachment_references[1]);
+            .setInputAttachmentCount(input_attachments.size())
+            .setPInputAttachments(input_attachments.data())
+            .setColorAttachmentCount(color_attachments.size())
+            .setPColorAttachments(color_attachments.data())
+            .setPDepthStencilAttachment(&attachment_reference_depth);
 
         vk::RenderPassCreateInfo render_pass_create_info;
         render_pass_create_info

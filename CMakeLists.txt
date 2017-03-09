@@ -5,7 +5,7 @@ cmake_minimum_required( VERSION 3.0.2 )
 find_package(Vulkan)
 
 get_filename_component(Vulkan_BIN_PATH ${Vulkan_LIBRARY} DIRECTORY)
-find_program(GLSLANGVALIDATOR glslangvalidator ${Vulkan_BIN_PATH})
+find_program(GLSLANGVALIDATOR glslangValidator "${Vulkan_BIN_PATH}/../Bin")
 
 macro(BuildSPIRV shader_in shader_out)
     get_filename_component(FULL_PATH_IN ${shader_in} REALPATH)
