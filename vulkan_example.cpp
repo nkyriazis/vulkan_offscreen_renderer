@@ -616,7 +616,7 @@ int main(int argc, char **argv)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
             .setInitialLayout(vk::ImageLayout::eColorAttachmentOptimal)
             .setFinalLayout(vk::ImageLayout::eGeneral);
-        attachment_descriptions[0]
+        attachment_descriptions[1]
             .setFormat(vk::Format::eD32Sfloat)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
