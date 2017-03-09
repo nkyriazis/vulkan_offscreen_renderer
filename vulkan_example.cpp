@@ -6,6 +6,7 @@
 #include <bitset>
 #include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace vkx
 {
@@ -373,7 +374,7 @@ int main(int argc, char **argv)
         ////////////////////////////////////////////////////////////////
         //  Descriptor set layout
         vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info;
-        std::array<vk::DescriptorSetLayoutBinding, 3> bindings;
+        std::array<vk::DescriptorSetLayoutBinding, 2> bindings;
         bindings[0]
             .setBinding(0)
             .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
@@ -381,11 +382,6 @@ int main(int argc, char **argv)
             .setStageFlags(vk::ShaderStageFlagBits::eVertex);
         bindings[1]
             .setBinding(1)
-            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1)
-            .setStageFlags(vk::ShaderStageFlagBits::eVertex);
-        bindings[2]
-            .setBinding(2)
             .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
             .setDescriptorCount(1)
             .setStageFlags(vk::ShaderStageFlagBits::eVertex);
@@ -480,7 +476,8 @@ int main(int argc, char **argv)
         vkx::device_memory positions_attachment_memory =
             vkx::allocate(device, mem_caps, positions_attachment,
                           vk::MemoryPropertyFlagBits::eDeviceLocal);
-        device->bindImageMemory(*positions_attachment, *positions_attachment_memory, 0);
+        device->bindImageMemory(*positions_attachment,
+                                *positions_attachment_memory, 0);
 
         vk::ImageSubresourceRange image_subresource_range_positions;
         image_subresource_range_positions
@@ -519,7 +516,7 @@ int main(int argc, char **argv)
 
         vkx::device_memory depth_attachment_memory =
             vkx::allocate(device, mem_caps, depth_attachment,
-                vk::MemoryPropertyFlagBits::eDeviceLocal);
+                          vk::MemoryPropertyFlagBits::eDeviceLocal);
         device->bindImageMemory(*depth_attachment, *depth_attachment_memory, 0);
 
         vk::ImageSubresourceRange image_subresource_range_depth;
@@ -679,8 +676,8 @@ int main(int argc, char **argv)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eColorAttachmentOptimal)
-            .setFinalLayout(vk::ImageLayout::eTransferSrcOptimal);
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
         vk::AttachmentReference attachment_reference_position_rt;
         attachment_reference_position_rt.setAttachment(0).setLayout(
@@ -692,7 +689,7 @@ int main(int argc, char **argv)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
         vk::AttachmentReference attachment_reference_depth;
@@ -717,8 +714,7 @@ int main(int argc, char **argv)
             .setAttachmentCount(uint32_t(attachment_descriptions.size()))
             .setPAttachments(attachment_descriptions.data())
             .setSubpassCount(1)
-            .setPSubpasses(&subpass_description)
-            ;
+            .setPSubpasses(&subpass_description);
         vkx::render_pass render_pass = vkx::make_handle(
             device->createRenderPass(render_pass_create_info),
             [device](auto rp) { device->destroyRenderPass(rp); });
@@ -757,6 +753,61 @@ int main(int argc, char **argv)
         vkx::frame_buffer frame_buffer = vkx::make_handle(
             device->createFramebuffer(framebuffer_create_info),
             [device](auto fb) { device->destroyFramebuffer(fb); });
+
+        ////////////////////////////////////////////////////////////////
+        //  Submit rendering
+
+        glm::mat4 projection_matrix =
+            glm::perspective(glm::pi<float>() / 3, 1.0f, 0.01f, 5.0f);
+        glm::mat4 view_matrix =
+            glm::inverse(glm::translate(glm::mat4(), glm::vec3(0, 0, -2)));
+
+        vkx::buffer projection_matrices, projection_matrices_staging,
+            view_matrices, view_matrices_staging;
+        vkx::device_memory projection_matrices_memory,
+            projection_matrices_staging_memory, view_matrices_memory,
+            view_matrices_staging_memory;
+
+        std::tie(projection_matrices_staging,
+                 projection_matrices_staging_memory) =
+            create_staging_buffer(sizeof(glm::mat4));
+        vkx::copy(device, projection_matrices_staging_memory,
+                  &projection_matrix[0][0], sizeof(projection_matrix));
+
+        std::tie(projection_matrices, projection_matrices_memory) =
+            create_device_buffer(sizeof(glm::mat4),
+                                 vk::BufferUsageFlagBits::eStorageBuffer);
+        copy(projection_matrices_staging, projection_matrices,
+             sizeof(glm::mat4));
+
+        std::tie(view_matrices_staging, view_matrices_staging_memory) =
+            create_staging_buffer(sizeof(glm::mat4));
+        vkx::copy(device, view_matrices_staging_memory, &view_matrix[0][0],
+                  sizeof(view_matrix));
+
+        std::tie(view_matrices, view_matrices_memory) = create_device_buffer(
+            sizeof(glm::mat4), vk::BufferUsageFlagBits::eStorageBuffer);
+        copy(view_matrices_staging, view_matrices, sizeof(glm::mat4));
+
+        vkx::begin(command_buffer, true);
+
+        std::array<vk::ClearValue, 2> clear_values;
+        clear_values[0].setColor(vk::ClearColorValue());
+        clear_values[1].setDepthStencil(vk::ClearDepthStencilValue(1.0f));
+
+        vk::RenderPassBeginInfo render_pass_begin_info;
+        render_pass_begin_info.setClearValueCount(uint32_t(clear_values.size()))
+            .setPClearValues(clear_values.data())
+            .setFramebuffer(*frame_buffer)
+            .setRenderPass(*render_pass)
+            .setRenderArea(vk::Rect2D(vk::Offset2D(), vk::Extent2D(512, 512)));
+        command_buffer->beginRenderPass(render_pass_begin_info,
+                                        vk::SubpassContents::eInline);
+
+        command_buffer->endRenderPass();
+
+        vkx::end(command_buffer);
+        vkx::submit(queue, command_buffer, true);
 
     } // try
     catch (const std::exception &e)

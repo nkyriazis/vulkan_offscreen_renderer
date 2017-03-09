@@ -10,11 +10,6 @@ layout(set=0, binding=1) buffer ProjectionMatrices
 	mat4 g_projectionMatrices[];
 };
 
-layout(set=0, binding=2) buffer BoneMatrices
-{
-	mat4 g_boneMatrices[];
-};
-
 layout(push_constant) uniform Configuration
 {
     ivec2   grid;
