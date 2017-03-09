@@ -117,7 +117,7 @@ create_buffer(const device &                            dev,
     vk::MemoryAllocateInfo memory_allocate_info;
     {
         memory_allocate_info.setAllocationSize(memory_requirements.size)
-            .setMemoryTypeIndex(memory_index);
+            .setMemoryTypeIndex(uint32_t(memory_index));
     }
     device_memory device_memory_ = make_handle(
         dev->allocateMemory(memory_allocate_info),
@@ -196,7 +196,7 @@ int main(int argc, char **argv)
         }();
 
         vk::InstanceCreateInfo instanceCreateInfo;
-        instanceCreateInfo.setEnabledExtensionCount(extensions.size())
+        instanceCreateInfo.setEnabledExtensionCount(uint32_t(extensions.size()))
             .setPpEnabledExtensionNames(extensions.data());
 
         auto layers = []() {
@@ -205,7 +205,7 @@ int main(int argc, char **argv)
             return layers;
         }();
 
-        instanceCreateInfo.setEnabledLayerCount(layers.size())
+        instanceCreateInfo.setEnabledLayerCount(uint32_t(layers.size()))
             .setPpEnabledLayerNames(layers.data());
 
         vkx::instance instance =
@@ -272,7 +272,7 @@ int main(int argc, char **argv)
 
         vk::DeviceQueueCreateInfo device_queue_create_info;
         device_queue_create_info
-            .setQueueFamilyIndex(graphics_transfer_family_index)
+            .setQueueFamilyIndex(uint32_t(graphics_transfer_family_index))
             .setQueueCount(1)
             .setPQueuePriorities([]() {
                 static const float priorities[] = {1.0f};
@@ -293,7 +293,7 @@ int main(int argc, char **argv)
         //  Command pool
         vk::CommandPoolCreateInfo command_pool_create_info;
         command_pool_create_info
-            .setQueueFamilyIndex(graphics_transfer_family_index)
+            .setQueueFamilyIndex(uint32_t(graphics_transfer_family_index))
             .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
         vkx::command_pool command_pool = vkx::make_handle(
             device->createCommandPool(command_pool_create_info),
@@ -302,7 +302,7 @@ int main(int argc, char **argv)
         ////////////////////////////////////////////////////////////////
         //  Queue
         vkx::queue queue = vkx::make_handle(
-            device->getQueue(graphics_transfer_family_index, 0),
+            device->getQueue(uint32_t(graphics_transfer_family_index), 0),
             [device](auto) {});
 
         ////////////////////////////////////////////////////////////////
@@ -369,7 +369,7 @@ int main(int argc, char **argv)
             .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
             .setDescriptorCount(1)
             .setStageFlags(vk::ShaderStageFlagBits::eVertex);
-        descriptor_set_layout_create_info.setBindingCount(bindings.size())
+        descriptor_set_layout_create_info.setBindingCount(uint32_t(bindings.size()))
             .setPBindings(bindings.data());
 
         vkx::descriptor_set_layout descriptor_set_layout = vkx::make_handle(
@@ -557,11 +557,11 @@ int main(int argc, char **argv)
             pipeline_vertex_input_state_create_info;
         pipeline_vertex_input_state_create_info
             .setVertexBindingDescriptionCount(
-                vertex_input_binding_descriptions.size())
+                uint32_t(vertex_input_binding_descriptions.size()))
             .setPVertexBindingDescriptions(
                 vertex_input_binding_descriptions.data())
             .setVertexAttributeDescriptionCount(
-                vertex_input_attribute_descriptions.size())
+                uint32_t(vertex_input_attribute_descriptions.size()))
             .setPVertexAttributeDescriptions(
                 vertex_input_attribute_descriptions.data());
 
@@ -614,7 +614,7 @@ int main(int argc, char **argv)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eColorAttachmentOptimal)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
         vk::AttachmentReference attachment_reference_position_rt;
@@ -627,7 +627,7 @@ int main(int argc, char **argv)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
         vk::AttachmentReference attachment_reference_depth;
@@ -646,18 +646,45 @@ int main(int argc, char **argv)
         vk::SubpassDescription subpass_description;
         subpass_description
             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-            .setInputAttachmentCount(input_attachments.size())
+            .setInputAttachmentCount(uint32_t(input_attachments.size()))
             .setPInputAttachments(input_attachments.data())
-            .setColorAttachmentCount(color_attachments.size())
+            .setColorAttachmentCount(uint32_t(color_attachments.size()))
             .setPColorAttachments(color_attachments.data())
             .setPDepthStencilAttachment(&attachment_reference_depth);
 
+        // std::array<vk::SubpassDependency, 2> subpass_dependencies;
+        // subpass_dependencies[0]
+        //    .setSrcSubpass(VK_SUBPASS_EXTERNAL)
+        //    .setDstSubpass(0)
+        //    .setSrcStageMask(vk::PipelineStageFlagBits::eBottomOfPipe)
+        //    .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+        //    .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+        //    .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
+        //                      vk::AccessFlagBits::eColorAttachmentWrite |
+        //                      vk::AccessFlagBits::eDepthStencilAttachmentRead
+        //                      |
+        //                      vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+        // subpass_dependencies[1]
+        //    .setSrcSubpass(0)
+        //    .setDstSubpass(VK_SUBPASS_EXTERNAL)
+        //    .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+        //    .setDstStageMask(vk::PipelineStageFlagBits::eBottomOfPipe)
+        //    .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
+        //                      vk::AccessFlagBits::eColorAttachmentWrite |
+        //                      vk::AccessFlagBits::eDepthStencilAttachmentRead
+        //                      |
+        //                      vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+        //    .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+
         vk::RenderPassCreateInfo render_pass_create_info;
         render_pass_create_info
-            .setAttachmentCount(attachment_descriptions.size())
+            .setAttachmentCount(uint32_t(attachment_descriptions.size()))
             .setPAttachments(attachment_descriptions.data())
             .setSubpassCount(1)
-            .setPSubpasses(&subpass_description);
+            .setPSubpasses(&subpass_description)
+            //.setDependencyCount(subpass_dependencies.size())
+            //.setPDependencies(subpass_dependencies.data())
+            ;
         vkx::render_pass render_pass = vkx::make_handle(
             device->createRenderPass(render_pass_create_info),
             [device](auto rp) { device->destroyRenderPass(rp); });
@@ -669,7 +696,7 @@ int main(int argc, char **argv)
             .setPInputAssemblyState(&pipeline_input_assembly_state_create_info)
             .setPMultisampleState(&pipeline_multisample_state_create_info)
             .setPRasterizationState(&pipeline_rasterization_state_create_info)
-            .setStageCount(pipeline_shader_stage_create_infos.size())
+            .setStageCount(uint32_t(pipeline_shader_stage_create_infos.size()))
             .setPStages(pipeline_shader_stage_create_infos.data())
             .setPVertexInputState(&pipeline_vertex_input_state_create_info)
             .setPViewportState(&pipeline_viewport_state_create_info)
