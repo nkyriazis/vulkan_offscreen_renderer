@@ -54,9 +54,12 @@ VkBool32 VKAPI_PTR log(VkDebugReportFlagsEXT      flags,
     std::ostream &out =
         flags == VK_DEBUG_REPORT_ERROR_BIT_EXT ? std::cerr : std::cout;
     out << vk::to_string(flags_) << " : " << vk::to_string(object_type_)
-        << " : " << pLayerPrefix << " : " << pMessage << std::endl;
+        << " : " << pLayerPrefix << " : " << pMessage
+        << /*" : object " << object
+        << " : location : " << location << " : messageCode : " << messageCode
+        <<*/ std::endl;
     out.flush();
-    return flags_ == decltype(flags_)::eError ? VK_FALSE : VK_TRUE;
+    return flags_ == decltype(flags_)::eError ? VK_TRUE : VK_FALSE;
 }
 
 auto load_binary_file(const std::string &filename)
@@ -129,9 +132,7 @@ void end(const command_buffer &cb) { cb->end(); }
 void submit(const queue &q, const command_buffer &cb, bool wait = false)
 {
     vk::SubmitInfo submit_info;
-    {
-        submit_info.setCommandBufferCount(1).setPCommandBuffers(&*cb);
-    }
+    submit_info.setCommandBufferCount(1).setPCommandBuffers(&*cb);
     q->submit({submit_info}, vk::Fence());
     if (wait)
         q->waitIdle();
@@ -143,9 +144,7 @@ void copy(const queue &q, const command_buffer &cb, const buffer &from,
     begin(cb, true);
 
     vk::BufferCopy buffer_copy;
-    {
-        buffer_copy.setDstOffset(0).setSize(size).setSrcOffset(0);
-    }
+    buffer_copy.setDstOffset(0).setSize(size).setSrcOffset(0);
     cb->copyBuffer(*from, *to, {buffer_copy});
 
     end(cb);
@@ -322,22 +321,6 @@ int main(int argc, char **argv)
             [instance, physical_device](auto device) { device.destroy(); });
 
         ////////////////////////////////////////////////////////////////
-        //  Command pool
-        vk::CommandPoolCreateInfo command_pool_create_info;
-        command_pool_create_info
-            .setQueueFamilyIndex(uint32_t(graphics_transfer_family_index))
-            .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-        vkx::command_pool command_pool = vkx::make_handle(
-            device->createCommandPool(command_pool_create_info),
-            [device](auto pool) { device->destroyCommandPool(pool); });
-
-        ////////////////////////////////////////////////////////////////
-        //  Queue
-        vkx::queue queue = vkx::make_handle(
-            device->getQueue(uint32_t(graphics_transfer_family_index), 0),
-            [device](auto) {});
-
-        ////////////////////////////////////////////////////////////////
         //  Descriptor pool
         std::array<vk::DescriptorPoolSize, 2> descriptor_pool_sizes;
         descriptor_pool_sizes[0]
@@ -357,6 +340,22 @@ int main(int argc, char **argv)
             [device](auto dp) { device->destroyDescriptorPool(dp); });
 
         ////////////////////////////////////////////////////////////////
+        //  Command pool
+        vk::CommandPoolCreateInfo command_pool_create_info;
+        command_pool_create_info
+            .setQueueFamilyIndex(uint32_t(graphics_transfer_family_index))
+            .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+        vkx::command_pool command_pool = vkx::make_handle(
+            device->createCommandPool(command_pool_create_info),
+            [device](auto pool) { device->destroyCommandPool(pool); });
+
+        ////////////////////////////////////////////////////////////////
+        //  Queue
+        vkx::queue queue = vkx::make_handle(
+            device->getQueue(uint32_t(graphics_transfer_family_index), 0),
+            [device](auto) {});
+
+        ////////////////////////////////////////////////////////////////
         //  Command buffer
         vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
         commandBufferAllocateInfo.setCommandPool(*command_pool)
@@ -370,23 +369,23 @@ int main(int argc, char **argv)
 
         ////////////////////////////////////////////////////////////////
         //  Shaders
-        vk::ShaderModuleCreateInfo shader_module_create_info_vert;
-        auto                       vertex_shader_code =
+        auto vertex_shader_code =
             vkx::load_binary_file("media/shader.vert.spv");
+        vk::ShaderModuleCreateInfo shader_module_create_info_vert;
         shader_module_create_info_vert.setCodeSize(vertex_shader_code.size())
             .setPCode(
                 reinterpret_cast<const uint32_t *>(vertex_shader_code.data()));
 
-        vk::ShaderModuleCreateInfo shader_module_create_info_frag;
-        auto                       fragment_shader_code =
+        auto fragment_shader_code =
             vkx::load_binary_file("media/shader.frag.spv");
+        vk::ShaderModuleCreateInfo shader_module_create_info_frag;
         shader_module_create_info_frag.setCodeSize(fragment_shader_code.size())
             .setPCode(reinterpret_cast<const uint32_t *>(
                 fragment_shader_code.data()));
 
-        vk::ShaderModuleCreateInfo shader_module_create_info_geom;
-        auto                       geometry_shader_code =
+        auto geometry_shader_code =
             vkx::load_binary_file("media/shader.geom.spv");
+        vk::ShaderModuleCreateInfo shader_module_create_info_geom;
         shader_module_create_info_geom.setCodeSize(geometry_shader_code.size())
             .setPCode(reinterpret_cast<const uint32_t *>(
                 geometry_shader_code.data()));
@@ -800,12 +799,12 @@ int main(int argc, char **argv)
                 device->freeDescriptorSets(*descriptor_pool, {ds});
             });
 
-        std::array<vk::DescriptorBufferInfo, 2> descriptor_buffer_infos;
-        descriptor_buffer_infos[0]
-            .setBuffer(*view_matrices)
+        vk::DescriptorBufferInfo descriptor_buffer_info_view_matrices;
+        descriptor_buffer_info_view_matrices.setBuffer(*view_matrices)
             .setOffset(0)
             .setRange(VK_WHOLE_SIZE);
-        descriptor_buffer_infos[1]
+        vk::DescriptorBufferInfo descriptor_buffer_info_projection_matrices;
+        descriptor_buffer_info_projection_matrices
             .setBuffer(*projection_matrices)
             .setOffset(0)
             .setRange(VK_WHOLE_SIZE);
@@ -817,15 +816,21 @@ int main(int argc, char **argv)
             .setDstArrayElement(0)
             .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
             .setDescriptorCount(1)
-            .setPBufferInfo(&descriptor_buffer_infos[0]);
+            .setPBufferInfo(&descriptor_buffer_info_view_matrices);
         write_descriptor_sets[1]
             .setDstSet(*descriptor_set)
             .setDstBinding(1)
             .setDstArrayElement(0)
             .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
             .setDescriptorCount(1)
-            .setPBufferInfo(&descriptor_buffer_infos[1]);
+            .setPBufferInfo(&descriptor_buffer_info_projection_matrices);
         device->updateDescriptorSets(write_descriptor_sets, {});
+
+        push_constants constants = {{1, 1}, {512.0f, 512.0f}, 0, 0};
+        command_buffer->pushConstants(*pipeline_layout,
+                                      vk::ShaderStageFlagBits::eVertex |
+                                          vk::ShaderStageFlagBits::eFragment,
+                                      0, sizeof(constants), &constants);
 
         std::array<vk::ClearValue, 2> clear_values;
         clear_values[0].setColor(vk::ClearColorValue());
@@ -839,7 +844,7 @@ int main(int argc, char **argv)
             .setRenderArea(vk::Rect2D(vk::Offset2D(), vk::Extent2D(512, 512)));
         command_buffer->beginRenderPass(render_pass_begin_info,
                                         vk::SubpassContents::eInline);
-
+        command_buffer->drawIndexed(triangle_data.size(), 1, 0, 0, 0);
         command_buffer->endRenderPass();
 
         vkx::end(command_buffer);
