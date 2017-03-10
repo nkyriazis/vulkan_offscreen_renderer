@@ -39,35 +39,24 @@ using pipeline_layout           = handle<vk::PipelineLayout>;
 using pipeline                  = handle<vk::Pipeline>;
 using render_pass               = handle<vk::RenderPass>;
 using frame_buffer              = handle<vk::Framebuffer>;
+using descriptor_pool           = handle<vk::DescriptorPool>;
+using descriptor_set            = handle<vk::DescriptorSet>;
 
 VkBool32 VKAPI_PTR log(VkDebugReportFlagsEXT      flags,
-                       VkDebugReportObjectTypeEXT objectType_, uint64_t object,
+                       VkDebugReportObjectTypeEXT object_type, uint64_t object,
                        size_t location, int32_t messageCode,
                        const char *pLayerPrefix, const char *pMessage,
                        void *pUserData)
 {
+    auto flags_       = static_cast<vk::DebugReportFlagBitsEXT>(flags);
+    auto object_type_ = static_cast<vk::DebugReportObjectTypeEXT>(object_type);
+
     std::ostream &out =
         flags == VK_DEBUG_REPORT_ERROR_BIT_EXT ? std::cerr : std::cout;
-    switch (flags)
-    {
-    case VK_DEBUG_REPORT_INFORMATION_BIT_EXT:
-        out << "INFO : ";
-        break;
-    case VK_DEBUG_REPORT_WARNING_BIT_EXT:
-        out << "WARNING : ";
-        break;
-    case VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT:
-        out << "PERFORMANCE WARNING : ";
-        break;
-    case VK_DEBUG_REPORT_ERROR_BIT_EXT:
-        out << "ERROR : ";
-        break;
-    case VK_DEBUG_REPORT_DEBUG_BIT_EXT:
-        out << "DEBUG : ";
-        break;
-    }
-    out << pLayerPrefix << " : " << pMessage << std::endl;
-    return flags == VK_DEBUG_REPORT_ERROR_BIT_EXT ? VK_FALSE : VK_TRUE;
+    out << vk::to_string(flags_) << " : " << vk::to_string(object_type_)
+        << " : " << pLayerPrefix << " : " << pMessage << std::endl;
+    out.flush();
+    return flags_ == decltype(flags_)::eError ? VK_FALSE : VK_TRUE;
 }
 
 auto load_binary_file(const std::string &filename)
@@ -126,29 +115,6 @@ allocate(const device &dev, const vk::PhysicalDeviceMemoryProperties &mem_caps,
         });
 }
 
-std::pair<buffer, device_memory>
-create_buffer(const device &                            dev,
-              const vk::PhysicalDeviceMemoryProperties &mem_caps, size_t size,
-              vk::BufferUsageFlags flags, vk::MemoryPropertyFlags mem_props)
-{
-    vk::BufferCreateInfo buffer_create_info;
-    {
-        buffer_create_info.setSharingMode(vk::SharingMode::eExclusive)
-            .setSize(size)
-            .setUsage(flags);
-    }
-    buffer buffer_ = make_handle(
-        dev->createBuffer(buffer_create_info), [device = dev](auto buffer) {
-            device->destroyBuffer(buffer);
-        });
-
-    device_memory device_memory_ = allocate(dev, mem_caps, buffer_, mem_props);
-
-    dev->bindBufferMemory(*buffer_, *device_memory_, 0);
-
-    return std::make_pair(buffer_, device_memory_);
-}
-
 void begin(const command_buffer &cb, bool single_time = false)
 {
     vk::CommandBufferBeginInfo command_buffer_begin_info;
@@ -193,6 +159,49 @@ void copy(const device &dev, const device_memory &mem, const void *data,
     std::memcpy(write, data, size);
     dev->unmapMemory(*mem);
 }
+
+buffer create_buffer(const device &dev, const queue &q,
+                     const command_buffer &                    cb,
+                     const vk::PhysicalDeviceMemoryProperties &mem_caps,
+                     vk::BufferUsageFlags flags, const void *data, size_t size)
+{
+    vk::BufferCreateInfo staging_buffer_create_info;
+    staging_buffer_create_info.setSharingMode(vk::SharingMode::eExclusive)
+        .setSize(size)
+        .setUsage(vk::BufferUsageFlagBits::eTransferSrc);
+    buffer staging_buffer = make_handle(
+        dev->createBuffer(staging_buffer_create_info), [device =
+                                                            dev](auto buffer) {
+            device->destroyBuffer(buffer);
+        });
+
+    device_memory staging_memory =
+        allocate(dev, mem_caps, staging_buffer,
+                 vk::MemoryPropertyFlagBits::eHostCoherent |
+                     vk::MemoryPropertyFlagBits::eHostVisible);
+
+    dev->bindBufferMemory(*staging_buffer, *staging_memory, 0);
+
+    copy(dev, staging_memory, data, size);
+
+    vk::BufferCreateInfo buffer_create_info;
+    buffer_create_info.setSharingMode(vk::SharingMode::eExclusive)
+        .setSize(size)
+        .setUsage(flags | vk::BufferUsageFlagBits::eTransferDst);
+    vk::Buffer buffer = dev->createBuffer(buffer_create_info);
+
+    device_memory device_memory =
+        allocate(dev, mem_caps, make_handle(buffer, [](auto) {}),
+                 vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    dev->bindBufferMemory(buffer, *device_memory, 0);
+
+    copy(q, cb, staging_buffer, make_handle(buffer, [](auto) {}), size);
+
+    return vkx::make_handle(buffer, [ device = dev, device_memory ](auto b) {
+        device->destroyBuffer(b);
+    });
+}
 }
 
 struct push_constants
@@ -222,7 +231,9 @@ int main(int argc, char **argv)
 
         auto layers = []() {
             static const std::array<const char *, 1> layers = {
-                "VK_LAYER_LUNARG_standard_validation"};
+                "VK_LAYER_LUNARG_standard_validation",
+                //"VK_LAYER_LUNARG_api_dump"
+            };
             return layers;
         }();
 
@@ -327,6 +338,25 @@ int main(int argc, char **argv)
             [device](auto) {});
 
         ////////////////////////////////////////////////////////////////
+        //  Descriptor pool
+        std::array<vk::DescriptorPoolSize, 2> descriptor_pool_sizes;
+        descriptor_pool_sizes[0]
+            .setType(vk::DescriptorType::eStorageBufferDynamic)
+            .setDescriptorCount(1);
+        descriptor_pool_sizes[1]
+            .setType(vk::DescriptorType::eStorageBufferDynamic)
+            .setDescriptorCount(1);
+        vk::DescriptorPoolCreateInfo descriptor_pool_create_info;
+        descriptor_pool_create_info
+            .setPoolSizeCount(uint32_t(descriptor_pool_sizes.size()))
+            .setPPoolSizes(descriptor_pool_sizes.data())
+            .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
+            .setMaxSets(1);
+        vkx::descriptor_pool descriptor_pool = vkx::make_handle(
+            device->createDescriptorPool(descriptor_pool_create_info),
+            [device](auto dp) { device->destroyDescriptorPool(dp); });
+
+        ////////////////////////////////////////////////////////////////
         //  Command buffer
         vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
         commandBufferAllocateInfo.setCommandPool(*command_pool)
@@ -396,35 +426,11 @@ int main(int argc, char **argv)
 
         ////////////////////////////////////////////////////////////////
         //  3D mesh
-        auto create_buffer = [device, mem_caps](size_t size,
-                                                vk::BufferUsageFlags    usage,
-                                                vk::MemoryPropertyFlags mem) {
-            return vkx::create_buffer(device, mem_caps, size, usage, mem);
+        auto create_buffer = [device, queue, command_buffer, mem_caps](
+            vk::BufferUsageFlags usage, const void *data, size_t size) {
+            return vkx::create_buffer(device, queue, command_buffer, mem_caps,
+                                      usage, data, size);
         };
-
-        auto create_device_buffer = [&create_buffer](
-            size_t size, vk::BufferUsageFlags usage) {
-            return create_buffer(size,
-                                 usage | vk::BufferUsageFlagBits::eTransferDst,
-                                 vk::MemoryPropertyFlagBits::eDeviceLocal);
-        };
-
-        auto create_staging_buffer = [&create_buffer](size_t size) {
-            return create_buffer(size, vk::BufferUsageFlagBits::eTransferSrc,
-                                 vk::MemoryPropertyFlagBits::eHostCoherent |
-                                     vk::MemoryPropertyFlagBits::eHostVisible);
-        };
-
-        auto copy = [queue, command_buffer](
-            const vkx::buffer &from, const vkx::buffer &to, size_t size) {
-            vkx::copy(queue, command_buffer, from, to, size);
-        };
-
-        vkx::buffer vertex_positions, vertex_positions_staging, triangles,
-            triangles_staging;
-        vkx::device_memory vertex_positions_memory,
-            vertex_positions_staging_memory, triangles_memory,
-            triangles_staging_memory;
 
         std::array<glm::vec3, 8> position_data = {
             glm::vec3(-1.0, -1.0, 1.0),  glm::vec3(1.0, -1.0, 1.0),
@@ -432,28 +438,19 @@ int main(int argc, char **argv)
             glm::vec3(-1.0, -1.0, -1.0), glm::vec3(1.0, -1.0, -1.0),
             glm::vec3(1.0, 1.0, -1.0),   glm::vec3(-1.0, 1.0, -1.0)};
 
-        std::tie(vertex_positions_staging, vertex_positions_staging_memory) =
-            create_staging_buffer(sizeof(position_data));
-        vkx::copy(device, vertex_positions_staging_memory, position_data.data(),
-                  sizeof(position_data));
-
-        std::tie(vertex_positions, vertex_positions_memory) =
-            create_device_buffer(sizeof(position_data),
-                                 vk::BufferUsageFlagBits::eVertexBuffer);
-        copy(vertex_positions_staging, vertex_positions, sizeof(position_data));
+        vkx::buffer vertex_positions =
+            create_buffer(vk::BufferUsageFlagBits::eVertexBuffer,
+                          position_data.data(), sizeof(position_data));
 
         std::array<glm::uvec3, 12> triangle_data = {
             glm::uvec3(0, 1, 2), glm::uvec3(2, 3, 0), glm::uvec3(1, 5, 6),
             glm::uvec3(6, 2, 1), glm::uvec3(7, 6, 5), glm::uvec3(5, 4, 7),
             glm::uvec3(4, 0, 3), glm::uvec3(3, 7, 4), glm::uvec3(4, 5, 1),
             glm::uvec3(1, 0, 4), glm::uvec3(3, 2, 6), glm::uvec3(6, 7, 3)};
-        std::tie(triangles_staging, triangles_staging_memory) =
-            create_staging_buffer(sizeof(triangle_data));
-        vkx::copy(device, triangles_staging_memory, triangle_data.data(),
-                  sizeof(triangle_data));
-        std::tie(triangles, triangles_memory) = create_device_buffer(
-            sizeof(triangle_data), vk::BufferUsageFlagBits::eIndexBuffer);
-        copy(triangles_staging, triangles, sizeof(triangle_data));
+
+        vkx::buffer triangles =
+            create_buffer(vk::BufferUsageFlagBits::eIndexBuffer,
+                          triangle_data.data(), sizeof(triangle_data));
 
         ////////////////////////////////////////////////////////////////
         //  Color/Depth attachments
@@ -755,41 +752,80 @@ int main(int argc, char **argv)
             [device](auto fb) { device->destroyFramebuffer(fb); });
 
         ////////////////////////////////////////////////////////////////
-        //  Submit rendering
-
+        //  World/View/Projection setup
         glm::mat4 projection_matrix =
             glm::perspective(glm::pi<float>() / 3, 1.0f, 0.01f, 5.0f);
+
+        vkx::buffer projection_matrices =
+            create_buffer(vk::BufferUsageFlagBits::eStorageBuffer,
+                          &projection_matrix, sizeof(projection_matrix));
+
         glm::mat4 view_matrix =
             glm::inverse(glm::translate(glm::mat4(), glm::vec3(0, 0, -2)));
 
-        vkx::buffer projection_matrices, projection_matrices_staging,
-            view_matrices, view_matrices_staging;
-        vkx::device_memory projection_matrices_memory,
-            projection_matrices_staging_memory, view_matrices_memory,
-            view_matrices_staging_memory;
+        vkx::buffer view_matrices =
+            create_buffer(vk::BufferUsageFlagBits::eStorageBuffer, &view_matrix,
+                          sizeof(view_matrix));
 
-        std::tie(projection_matrices_staging,
-                 projection_matrices_staging_memory) =
-            create_staging_buffer(sizeof(glm::mat4));
-        vkx::copy(device, projection_matrices_staging_memory,
-                  &projection_matrix[0][0], sizeof(projection_matrix));
+        glm::mat4 world_matrix;
 
-        std::tie(projection_matrices, projection_matrices_memory) =
-            create_device_buffer(sizeof(glm::mat4),
-                                 vk::BufferUsageFlagBits::eStorageBuffer);
-        copy(projection_matrices_staging, projection_matrices,
-             sizeof(glm::mat4));
+        vkx::buffer world_matrices =
+            create_buffer(vk::BufferUsageFlagBits::eVertexBuffer, &world_matrix,
+                          sizeof(world_matrix));
 
-        std::tie(view_matrices_staging, view_matrices_staging_memory) =
-            create_staging_buffer(sizeof(glm::mat4));
-        vkx::copy(device, view_matrices_staging_memory, &view_matrix[0][0],
-                  sizeof(view_matrix));
+        glm::ivec4 instance_index = {0, 0, 0, 0};
 
-        std::tie(view_matrices, view_matrices_memory) = create_device_buffer(
-            sizeof(glm::mat4), vk::BufferUsageFlagBits::eStorageBuffer);
-        copy(view_matrices_staging, view_matrices, sizeof(glm::mat4));
+        vkx::buffer instance_indices =
+            create_buffer(vk::BufferUsageFlagBits::eVertexBuffer,
+                          &instance_index, sizeof(instance_index));
 
+        ////////////////////////////////////////////////////////////////
+        //  Submit rendering
         vkx::begin(command_buffer, true);
+
+        command_buffer->bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                     *pipeline);
+        command_buffer->bindVertexBuffers(
+            0, {*vertex_positions, *instance_indices, *world_matrices},
+            {0, 0, 0});
+        command_buffer->bindIndexBuffer(*triangles, 0, vk::IndexType::eUint32);
+
+        vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
+        descriptorSetAllocateInfo.setDescriptorPool(*descriptor_pool)
+            .setDescriptorSetCount(1)
+            .setPSetLayouts(&*descriptor_set_layout);
+        vkx::descriptor_set descriptor_set = vkx::make_handle(
+            device->allocateDescriptorSets(descriptorSetAllocateInfo)[0],
+            [device, descriptor_pool](auto ds) {
+                device->freeDescriptorSets(*descriptor_pool, {ds});
+            });
+
+        std::array<vk::DescriptorBufferInfo, 2> descriptor_buffer_infos;
+        descriptor_buffer_infos[0]
+            .setBuffer(*view_matrices)
+            .setOffset(0)
+            .setRange(VK_WHOLE_SIZE);
+        descriptor_buffer_infos[1]
+            .setBuffer(*projection_matrices)
+            .setOffset(0)
+            .setRange(VK_WHOLE_SIZE);
+
+        std::array<vk::WriteDescriptorSet, 2> write_descriptor_sets;
+        write_descriptor_sets[0]
+            .setDstSet(*descriptor_set)
+            .setDstBinding(0)
+            .setDstArrayElement(0)
+            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
+            .setDescriptorCount(1)
+            .setPBufferInfo(&descriptor_buffer_infos[0]);
+        write_descriptor_sets[1]
+            .setDstSet(*descriptor_set)
+            .setDstBinding(1)
+            .setDstArrayElement(0)
+            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
+            .setDescriptorCount(1)
+            .setPBufferInfo(&descriptor_buffer_infos[1]);
+        device->updateDescriptorSets(write_descriptor_sets, {});
 
         std::array<vk::ClearValue, 2> clear_values;
         clear_values[0].setColor(vk::ClearColorValue());
