@@ -229,10 +229,9 @@ int main(int argc, char **argv)
             .setPpEnabledExtensionNames(extensions.data());
 
         auto layers = []() {
-            static const std::array<const char *, 1> layers = {
+            static const std::array<const char *, 2> layers = {
                 "VK_LAYER_LUNARG_standard_validation",
-                //"VK_LAYER_LUNARG_api_dump"
-            };
+                "VK_LAYER_LUNARG_api_dump"};
             return layers;
         }();
 
@@ -463,7 +462,8 @@ int main(int argc, char **argv)
             .setSamples(vk::SampleCountFlagBits::e1)
             .setSharingMode(vk::SharingMode::eExclusive)
             .setTiling(vk::ImageTiling::eOptimal)
-            .setUsage(vk::ImageUsageFlagBits::eColorAttachment);
+            .setUsage(vk::ImageUsageFlagBits::eColorAttachment |
+                      vk::ImageUsageFlagBits::eTransferSrc);
 
         vkx::image positions_attachment =
             vkx::make_handle(device->createImage(image_create_info_positions),
@@ -844,11 +844,71 @@ int main(int argc, char **argv)
             .setRenderArea(vk::Rect2D(vk::Offset2D(), vk::Extent2D(512, 512)));
         command_buffer->beginRenderPass(render_pass_begin_info,
                                         vk::SubpassContents::eInline);
-        command_buffer->drawIndexed(triangle_data.size(), 1, 0, 0, 0);
+        command_buffer->drawIndexed(uint32_t(triangle_data.size()), 1, 0, 0, 0);
         command_buffer->endRenderPass();
 
         vkx::end(command_buffer);
         vkx::submit(queue, command_buffer, true);
+
+        vk::BufferCreateInfo buffer_create_info;
+        buffer_create_info.setSharingMode(vk::SharingMode::eExclusive)
+            .setSize(512 * 512 * sizeof(glm::vec4))
+            .setUsage(vk::BufferUsageFlagBits::eTransferDst);
+        vkx::buffer position_map =
+            vkx::make_handle(device->createBuffer(buffer_create_info),
+                             [device](auto b) { device->destroyBuffer(b); });
+        vkx::device_memory position_map_memory =
+            vkx::allocate(device, mem_caps, position_map,
+                          vk::MemoryPropertyFlagBits::eHostVisible);
+        device->bindBufferMemory(*position_map, *position_map_memory, 0);
+
+        vk::ImageSubresourceRange image_subresource_range;
+        image_subresource_range.setAspectMask(vk::ImageAspectFlagBits::eColor)
+            .setBaseArrayLayer(0)
+            .setBaseMipLevel(0)
+            .setLayerCount(1)
+            .setLevelCount(1);
+        vk::ImageMemoryBarrier image_memory_barrier;
+        image_memory_barrier
+            .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+            .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setImage(*positions_attachment)
+            .setSubresourceRange(image_subresource_range)
+            .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
+                              vk::AccessFlagBits::eColorAttachmentWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+        vkx::begin(command_buffer);
+        command_buffer->pipelineBarrier(
+            vk::PipelineStageFlagBits::eBottomOfPipe,
+            vk::PipelineStageFlagBits::eBottomOfPipe,
+            vk::DependencyFlagBits::eByRegion, {}, {}, {image_memory_barrier});
+        vkx::end(command_buffer);
+        vkx::submit(queue, command_buffer, true);
+
+        vkx::begin(command_buffer);
+        vk::ImageSubresourceLayers image_subresource_layers;
+        image_subresource_layers.setAspectMask(vk::ImageAspectFlagBits::eColor)
+            .setBaseArrayLayer(0)
+            .setLayerCount(1)
+            .setMipLevel(0);
+        vk::BufferImageCopy buffer_image_copy;
+        buffer_image_copy.setBufferOffset(0)
+            .setBufferImageHeight(512)
+            .setBufferRowLength(512)
+            .setImageOffset(vk::Offset3D())
+            .setImageExtent(vk::Extent3D(512, 512, 1))
+            .setImageSubresource(image_subresource_layers);
+        command_buffer->copyImageToBuffer(*positions_attachment,
+                                          vk::ImageLayout::eTransferSrcOptimal,
+                                          *position_map, {buffer_image_copy});
+        vkx::end(command_buffer);
+        vkx::submit(queue, command_buffer, true);
+
+        void *ptr = device->mapMemory(*position_map_memory, 0,
+                                      512 * 512 * sizeof(glm::vec4));
+        device->unmapMemory(*position_map_memory);
 
     } // try
     catch (const std::exception &e)
