@@ -229,9 +229,10 @@ int main(int argc, char **argv)
             .setPpEnabledExtensionNames(extensions.data());
 
         auto layers = []() {
-            static const std::array<const char *, 2> layers = {
+            static const std::array<const char *, 1> layers = {
                 "VK_LAYER_LUNARG_standard_validation",
-                "VK_LAYER_LUNARG_api_dump"};
+                //"VK_LAYER_LUNARG_api_dump"
+            };
             return layers;
         }();
 
@@ -833,7 +834,8 @@ int main(int argc, char **argv)
                                       0, sizeof(constants), &constants);
 
         std::array<vk::ClearValue, 2> clear_values;
-        clear_values[0].setColor(vk::ClearColorValue());
+        clear_values[0].setColor(
+            vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 0}));
         clear_values[1].setDepthStencil(vk::ClearDepthStencilValue(1.0f));
 
         vk::RenderPassBeginInfo render_pass_begin_info;
@@ -908,6 +910,12 @@ int main(int argc, char **argv)
 
         void *ptr = device->mapMemory(*position_map_memory, 0,
                                       512 * 512 * sizeof(glm::vec4));
+        {
+            std::ofstream write_image("image.bin", std::ios::binary);
+            write_image.write(reinterpret_cast<const char *>(ptr),
+                              512 * 512 * sizeof(glm::vec4));
+            write_image.close();
+        }
         device->unmapMemory(*position_map_memory);
 
     } // try
