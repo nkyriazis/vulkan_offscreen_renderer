@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <bitset>
+#include <random>
 #include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -202,6 +203,8 @@ buffer create_buffer(const device &dev, const queue &q,
     });
 }
 }
+
+using push_constants = std::array<glm::vec3, 16>;
 
 int main(int argc, char **argv)
 {
@@ -410,7 +413,13 @@ int main(int argc, char **argv)
         ////////////////////////////////////////////////////////////////
         //  Pipeline
 
+        vk::PushConstantRange push_constant_range;
+        push_constant_range.setOffset(0)
+            .setSize(sizeof(push_constants))
+            .setStageFlags(vk::ShaderStageFlagBits::eVertex);
         vk::PipelineLayoutCreateInfo pipeline_layout_create_info;
+        pipeline_layout_create_info.setPushConstantRangeCount(1)
+            .setPPushConstantRanges(&push_constant_range);
 
         vkx::pipeline_layout pipeline_layout = vkx::make_handle(
             device->createPipelineLayout(pipeline_layout_create_info),
@@ -572,8 +581,21 @@ int main(int argc, char **argv)
 
         command_buffer->beginRenderPass(render_pass_begin_info,
                                         vk::SubpassContents::eInline);
-        command_buffer->bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);
-        command_buffer->draw(3, 1, 0, 0);
+        command_buffer->bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                     *pipeline);
+        std::random_device                    r;
+        std::default_random_engine            e1(r());
+        std::uniform_real_distribution<float> uniform_dist(0, 1);
+        push_constants                        constants;
+        std::generate(constants.begin(), constants.end(), [&]() {
+            return glm::vec3(uniform_dist(e1), uniform_dist(e1),
+                             uniform_dist(e1));
+        });
+        command_buffer->pushConstants(*pipeline_layout,
+                                      vk::ShaderStageFlagBits::eVertex, 0,
+                                      sizeof(constants), &constants);
+
+        command_buffer->draw(3, 10000, 0, 0);
         command_buffer->endRenderPass();
 
         command_buffer->end();
