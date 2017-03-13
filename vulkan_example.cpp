@@ -325,6 +325,20 @@ int main(int argc, char **argv)
             [device](auto pool) { device->destroyCommandPool(pool); });
 
         ////////////////////////////////////////////////////////////////
+        //  Descriptor pool
+        vk::DescriptorPoolSize descriptor_pool_size;
+        descriptor_pool_size.setDescriptorCount(1).setType(
+            vk::DescriptorType::eStorageBufferDynamic);
+        vk::DescriptorPoolCreateInfo descriptor_pool_create_info;
+        descriptor_pool_create_info.setMaxSets(1)
+            .setPoolSizeCount(1)
+            .setPPoolSizes(&descriptor_pool_size)
+            .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
+        vkx::descriptor_pool descriptor_pool = vkx::make_handle(
+            device->createDescriptorPool(descriptor_pool_create_info),
+            [device](auto dp) { device->destroyDescriptorPool(dp); });
+
+        ////////////////////////////////////////////////////////////////
         //  Queue
         vkx::queue queue = vkx::make_handle(
             device->getQueue(uint32_t(graphics_transfer_family_index), 0),
@@ -417,9 +431,26 @@ int main(int argc, char **argv)
         push_constant_range.setOffset(0)
             .setSize(sizeof(push_constants))
             .setStageFlags(vk::ShaderStageFlagBits::eVertex);
+
+        vk::DescriptorSetLayoutBinding descriptor_set_layout_binding;
+        descriptor_set_layout_binding.setBinding(0)
+            .setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
+            .setStageFlags(vk::ShaderStageFlagBits::eVertex);
+
+        vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info;
+        descriptor_set_layout_create_info.setBindingCount(1).setPBindings(
+            &descriptor_set_layout_binding);
+        vkx::descriptor_set_layout descriptor_set_layout = vkx::make_handle(
+            device->createDescriptorSetLayout(
+                descriptor_set_layout_create_info),
+            [device](auto dsl) { device->destroyDescriptorSetLayout(dsl); });
+
         vk::PipelineLayoutCreateInfo pipeline_layout_create_info;
         pipeline_layout_create_info.setPushConstantRangeCount(1)
-            .setPPushConstantRanges(&push_constant_range);
+            .setPPushConstantRanges(&push_constant_range)
+            .setSetLayoutCount(1)
+            .setPSetLayouts(&*descriptor_set_layout);
 
         vkx::pipeline_layout pipeline_layout = vkx::make_handle(
             device->createPipelineLayout(pipeline_layout_create_info),
@@ -565,6 +596,15 @@ int main(int argc, char **argv)
             [device](auto fb) { device->destroyFramebuffer(fb); });
 
         ////////////////////////////////////////////////////////////////
+        //  Vertex positions dynamic storage buffer
+        std::array<glm::vec2, 3> position_data = {
+            glm::vec2(0.0, -0.5), glm::vec2(0.5, 0.5), glm::vec2(-0.5, 0.5) };
+        vkx::buffer positions =
+            vkx::create_buffer(device, queue, command_buffer, mem_caps,
+                vk::BufferUsageFlagBits::eStorageBuffer,
+                &position_data, sizeof(position_data));
+
+        ////////////////////////////////////////////////////////////////
         //  Submit rendering
         vk::CommandBufferBeginInfo command_buffer_begin_info;
         command_buffer_begin_info.setFlags(
@@ -594,6 +634,33 @@ int main(int argc, char **argv)
         command_buffer->pushConstants(*pipeline_layout,
                                       vk::ShaderStageFlagBits::eVertex, 0,
                                       sizeof(constants), &constants);
+
+        vk::DescriptorSetAllocateInfo descriptor_set_allocate_info;
+        descriptor_set_allocate_info.setDescriptorPool(*descriptor_pool)
+            .setDescriptorSetCount(1)
+            .setPSetLayouts(&*descriptor_set_layout);
+        vkx::descriptor_set descriptor_set = vkx::make_handle(
+            device->allocateDescriptorSets(descriptor_set_allocate_info)[0],
+            [device, descriptor_pool](auto ds) {
+                device->freeDescriptorSets(*descriptor_pool, {ds});
+            });
+
+        vk::DescriptorBufferInfo descriptor_buffer_info;
+        descriptor_buffer_info.setOffset(0)
+            .setRange(VK_WHOLE_SIZE)
+            .setBuffer(*positions);
+
+        vk::WriteDescriptorSet write_descriptor_set;
+        write_descriptor_set.setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
+            .setDstArrayElement(0)
+            .setDstBinding(0)
+            .setDstSet(*descriptor_set)
+            .setPBufferInfo(&descriptor_buffer_info);
+        device->updateDescriptorSets({write_descriptor_set}, {});
+        command_buffer->bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                           *pipeline_layout, 0,
+                                           {*descriptor_set}, {0});
 
         command_buffer->draw(3, 10000, 0, 0);
         command_buffer->endRenderPass();
