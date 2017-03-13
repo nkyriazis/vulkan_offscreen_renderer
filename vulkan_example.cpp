@@ -424,6 +424,45 @@ int main(int argc, char **argv)
             device->createImageView(image_view_create_info_positions),
             [device](auto iv) { device->destroyImageView(iv); });
 
+        vk::ImageCreateInfo image_create_info_depth;
+        image_create_info_depth.setArrayLayers(1)
+            .setExtent(vk::Extent3D(512, 512, 1))
+            .setFormat(vk::Format::eD32Sfloat)
+            .setImageType(vk::ImageType::e2D)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setMipLevels(1)
+            .setSamples(vk::SampleCountFlagBits::e1)
+            .setSharingMode(vk::SharingMode::eExclusive)
+            .setTiling(vk::ImageTiling::eOptimal)
+            .setUsage(vk::ImageUsageFlagBits::eDepthStencilAttachment);
+
+        vkx::image depth_attachment =
+            vkx::make_handle(device->createImage(image_create_info_depth),
+                             [device](auto img) { device->destroyImage(img); });
+
+        vkx::device_memory depth_attachment_memory =
+            vkx::allocate(device, mem_caps, depth_attachment,
+                          vk::MemoryPropertyFlagBits::eDeviceLocal);
+        device->bindImageMemory(*depth_attachment, *depth_attachment_memory, 0);
+
+        vk::ImageSubresourceRange image_subresource_range_depth;
+        image_subresource_range_depth
+            .setAspectMask(vk::ImageAspectFlagBits::eDepth)
+            .setBaseArrayLayer(0)
+            .setBaseMipLevel(0)
+            .setLayerCount(1)
+            .setLevelCount(1);
+
+        vk::ImageViewCreateInfo image_view_create_info_depth;
+        image_view_create_info_depth.setFormat(image_create_info_depth.format)
+            .setImage(*depth_attachment)
+            .setViewType(vk::ImageViewType::e2D)
+            .setSubresourceRange(image_subresource_range_depth);
+
+        vkx::image_view image_view_depth = vkx::make_handle(
+            device->createImageView(image_view_create_info_depth),
+            [device](auto iv) { device->destroyImageView(iv); });
+
         ////////////////////////////////////////////////////////////////
         //  Pipeline
 
@@ -537,11 +576,26 @@ int main(int argc, char **argv)
         attachment_reference_position_rt.setAttachment(0).setLayout(
             vk::ImageLayout::eColorAttachmentOptimal);
 
+        vk::AttachmentDescription attachment_description_depth_rt;
+        attachment_description_depth_rt.setFormat(vk::Format::eD32Sfloat)
+            .setSamples(vk::SampleCountFlagBits::e1)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+        vk::AttachmentReference attachment_reference_depth_rt;
+        attachment_reference_depth_rt.setAttachment(1).setLayout(
+            vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
         vk::SubpassDescription subpass_description;
         subpass_description
             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
             .setColorAttachmentCount(1)
-            .setPColorAttachments(&attachment_reference_position_rt);
+            .setPColorAttachments(&attachment_reference_position_rt)
+            .setPDepthStencilAttachment(&attachment_reference_depth_rt);
 
         vk::SubpassDependency subpass_dependency;
         subpass_dependency.setSrcSubpass(VK_SUBPASS_EXTERNAL)
@@ -551,9 +605,13 @@ int main(int argc, char **argv)
             .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
                               vk::AccessFlagBits::eColorAttachmentWrite);
 
+        std::array<vk::AttachmentDescription, 2> attachments = {
+            attachment_description_position_rt,
+            attachment_description_depth_rt};
+
         vk::RenderPassCreateInfo render_pass_create_info;
-        render_pass_create_info.setAttachmentCount(1)
-            .setPAttachments(&attachment_description_position_rt)
+        render_pass_create_info.setAttachmentCount(uint32_t(attachments.size()))
+            .setPAttachments(attachments.data())
             .setSubpassCount(1)
             .setPSubpasses(&subpass_description)
             .setDependencyCount(1)
@@ -561,6 +619,15 @@ int main(int argc, char **argv)
         vkx::render_pass render_pass = vkx::make_handle(
             device->createRenderPass(render_pass_create_info),
             [device](auto rp) { device->destroyRenderPass(rp); });
+
+        vk::PipelineDepthStencilStateCreateInfo
+            pipeline_depth_stencil_state_create_info;
+        pipeline_depth_stencil_state_create_info
+            .setDepthCompareOp(vk::CompareOp::eLess)
+            .setDepthTestEnable(VK_TRUE)
+            .setDepthWriteEnable(VK_TRUE)
+            .setMinDepthBounds(0)
+            .setMaxDepthBounds(1);
 
         vk::GraphicsPipelineCreateInfo graphics_pipeline_create_info;
         graphics_pipeline_create_info.setLayout(*pipeline_layout)
@@ -572,6 +639,7 @@ int main(int argc, char **argv)
             .setPStages(pipeline_shader_stage_create_infos.data())
             .setPVertexInputState(&pipeline_vertex_input_state_create_info)
             .setPViewportState(&pipeline_viewport_state_create_info)
+            .setPDepthStencilState(&pipeline_depth_stencil_state_create_info)
             .setRenderPass(*render_pass)
             .setSubpass(0);
         vkx::pipeline pipeline = vkx::make_handle(
@@ -581,7 +649,8 @@ int main(int argc, char **argv)
 
         ////////////////////////////////////////////////////////////////
         //  Frame buffer
-        std::array<vk::ImageView, 1> image_views = {*image_view_positions};
+        std::array<vk::ImageView, 2> image_views = {*image_view_positions,
+                                                    *image_view_depth};
 
         vk::FramebufferCreateInfo framebuffer_create_info;
         framebuffer_create_info.setAttachmentCount(uint32_t(image_views.size()))
@@ -598,11 +667,11 @@ int main(int argc, char **argv)
         ////////////////////////////////////////////////////////////////
         //  Vertex positions dynamic storage buffer
         std::array<glm::vec2, 3> position_data = {
-            glm::vec2(0.0, -0.5), glm::vec2(0.5, 0.5), glm::vec2(-0.5, 0.5) };
+            glm::vec2(0.0, -0.5), glm::vec2(0.5, 0.5), glm::vec2(-0.5, 0.5)};
         vkx::buffer positions =
             vkx::create_buffer(device, queue, command_buffer, mem_caps,
-                vk::BufferUsageFlagBits::eStorageBuffer,
-                &position_data, sizeof(position_data));
+                               vk::BufferUsageFlagBits::eStorageBuffer,
+                               &position_data, sizeof(position_data));
 
         ////////////////////////////////////////////////////////////////
         //  Submit rendering
@@ -610,14 +679,15 @@ int main(int argc, char **argv)
         command_buffer_begin_info.setFlags(
             vk::CommandBufferUsageFlagBits::eSimultaneousUse);
         command_buffer->begin(command_buffer_begin_info);
-        vk::ClearValue clear_value;
-        clear_value.setColor(vk::ClearColorValue());
+        std::array<vk::ClearValue,2> clear_values;
+        clear_values[0].setColor(vk::ClearColorValue());
+        clear_values[1].setDepthStencil(vk::ClearDepthStencilValue(1));
         vk::RenderPassBeginInfo render_pass_begin_info;
         render_pass_begin_info.setRenderPass(*render_pass)
             .setFramebuffer(*frame_buffer)
             .setRenderArea(vk::Rect2D(vk::Offset2D(), vk::Extent2D(512, 512)))
-            .setClearValueCount(1)
-            .setPClearValues(&clear_value);
+            .setClearValueCount(uint32_t(clear_values.size()))
+            .setPClearValues(clear_values.data());
 
         command_buffer->beginRenderPass(render_pass_begin_info,
                                         vk::SubpassContents::eInline);
