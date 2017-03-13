@@ -203,14 +203,6 @@ buffer create_buffer(const device &dev, const queue &q,
 }
 }
 
-struct push_constants
-{
-    glm::ivec2 grid;
-    glm::vec2  mapDims;
-    int        issue;
-    int        bonesPerHypothesis;
-};
-
 int main(int argc, char **argv)
 {
     try
@@ -311,33 +303,13 @@ int main(int argc, char **argv)
             }());
 
         vk::PhysicalDeviceFeatures physical_device_features;
-        physical_device_features.setGeometryShader(true);
-        vk::DeviceCreateInfo device_info;
+        vk::DeviceCreateInfo       device_info;
         device_info.setQueueCreateInfoCount(1)
             .setPQueueCreateInfos(&device_queue_create_info)
             .setPEnabledFeatures(&physical_device_features);
         vkx::device device = vkx::make_handle(
             physical_device->createDevice(device_info),
             [instance, physical_device](auto device) { device.destroy(); });
-
-        ////////////////////////////////////////////////////////////////
-        //  Descriptor pool
-        std::array<vk::DescriptorPoolSize, 2> descriptor_pool_sizes;
-        descriptor_pool_sizes[0]
-            .setType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1);
-        descriptor_pool_sizes[1]
-            .setType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1);
-        vk::DescriptorPoolCreateInfo descriptor_pool_create_info;
-        descriptor_pool_create_info
-            .setPoolSizeCount(uint32_t(descriptor_pool_sizes.size()))
-            .setPPoolSizes(descriptor_pool_sizes.data())
-            .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
-            .setMaxSets(1);
-        vkx::descriptor_pool descriptor_pool = vkx::make_handle(
-            device->createDescriptorPool(descriptor_pool_create_info),
-            [device](auto dp) { device->destroyDescriptorPool(dp); });
 
         ////////////////////////////////////////////////////////////////
         //  Command pool
@@ -376,6 +348,10 @@ int main(int argc, char **argv)
             .setPCode(
                 reinterpret_cast<const uint32_t *>(vertex_shader_code.data()));
 
+        vkx::shader_module vertex_shader = vkx::make_handle(
+            device->createShaderModule(shader_module_create_info_vert),
+            [device](auto shader) { device->destroyShaderModule(shader); });
+
         auto fragment_shader_code =
             vkx::load_binary_file("media/shader.frag.spv");
         vk::ShaderModuleCreateInfo shader_module_create_info_frag;
@@ -383,73 +359,9 @@ int main(int argc, char **argv)
             .setPCode(reinterpret_cast<const uint32_t *>(
                 fragment_shader_code.data()));
 
-        auto geometry_shader_code =
-            vkx::load_binary_file("media/shader.geom.spv");
-        vk::ShaderModuleCreateInfo shader_module_create_info_geom;
-        shader_module_create_info_geom.setCodeSize(geometry_shader_code.size())
-            .setPCode(reinterpret_cast<const uint32_t *>(
-                geometry_shader_code.data()));
-
-        vkx::shader_module vertex_shader = vkx::make_handle(
-            device->createShaderModule(shader_module_create_info_vert),
-            [device](auto shader) { device->destroyShaderModule(shader); });
         vkx::shader_module fragment_shader = vkx::make_handle(
             device->createShaderModule(shader_module_create_info_frag),
             [device](auto shader) { device->destroyShaderModule(shader); });
-        vkx::shader_module geometry_shader = vkx::make_handle(
-            device->createShaderModule(shader_module_create_info_geom),
-            [device](auto shader) { device->destroyShaderModule(shader); });
-
-        ////////////////////////////////////////////////////////////////
-        //  Descriptor set layout
-        vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info;
-        std::array<vk::DescriptorSetLayoutBinding, 2> bindings;
-        bindings[0]
-            .setBinding(0)
-            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1)
-            .setStageFlags(vk::ShaderStageFlagBits::eVertex);
-        bindings[1]
-            .setBinding(1)
-            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1)
-            .setStageFlags(vk::ShaderStageFlagBits::eVertex);
-        descriptor_set_layout_create_info
-            .setBindingCount(uint32_t(bindings.size()))
-            .setPBindings(bindings.data());
-
-        vkx::descriptor_set_layout descriptor_set_layout = vkx::make_handle(
-            device->createDescriptorSetLayout(
-                descriptor_set_layout_create_info),
-            [device](auto dsl) { device->destroyDescriptorSetLayout(dsl); });
-
-        ////////////////////////////////////////////////////////////////
-        //  3D mesh
-        auto create_buffer = [device, queue, command_buffer, mem_caps](
-            vk::BufferUsageFlags usage, const void *data, size_t size) {
-            return vkx::create_buffer(device, queue, command_buffer, mem_caps,
-                                      usage, data, size);
-        };
-
-        std::array<glm::vec3, 8> position_data = {
-            glm::vec3(-1.0, -1.0, 1.0),  glm::vec3(1.0, -1.0, 1.0),
-            glm::vec3(1.0, 1.0, 1.0),    glm::vec3(-1.0, 1.0, 1.0),
-            glm::vec3(-1.0, -1.0, -1.0), glm::vec3(1.0, -1.0, -1.0),
-            glm::vec3(1.0, 1.0, -1.0),   glm::vec3(-1.0, 1.0, -1.0)};
-
-        vkx::buffer vertex_positions =
-            create_buffer(vk::BufferUsageFlagBits::eVertexBuffer,
-                          position_data.data(), sizeof(position_data));
-
-        std::array<glm::uvec3, 12> triangle_data = {
-            glm::uvec3(0, 1, 2), glm::uvec3(2, 3, 0), glm::uvec3(1, 5, 6),
-            glm::uvec3(6, 2, 1), glm::uvec3(7, 6, 5), glm::uvec3(5, 4, 7),
-            glm::uvec3(4, 0, 3), glm::uvec3(3, 7, 4), glm::uvec3(4, 5, 1),
-            glm::uvec3(1, 0, 4), glm::uvec3(3, 2, 6), glm::uvec3(6, 7, 3)};
-
-        vkx::buffer triangles =
-            create_buffer(vk::BufferUsageFlagBits::eIndexBuffer,
-                          triangle_data.data(), sizeof(triangle_data));
 
         ////////////////////////////////////////////////////////////////
         //  Color/Depth attachments
@@ -466,15 +378,15 @@ int main(int argc, char **argv)
             .setUsage(vk::ImageUsageFlagBits::eColorAttachment |
                       vk::ImageUsageFlagBits::eTransferSrc);
 
-        vkx::image positions_attachment =
+        vkx::image color_attachment =
             vkx::make_handle(device->createImage(image_create_info_positions),
                              [device](auto img) { device->destroyImage(img); });
 
         vkx::device_memory positions_attachment_memory =
-            vkx::allocate(device, mem_caps, positions_attachment,
+            vkx::allocate(device, mem_caps, color_attachment,
                           vk::MemoryPropertyFlagBits::eDeviceLocal);
-        device->bindImageMemory(*positions_attachment,
-                                *positions_attachment_memory, 0);
+        device->bindImageMemory(*color_attachment, *positions_attachment_memory,
+                                0);
 
         vk::ImageSubresourceRange image_subresource_range_positions;
         image_subresource_range_positions
@@ -487,7 +399,7 @@ int main(int argc, char **argv)
         vk::ImageViewCreateInfo image_view_create_info_positions;
         image_view_create_info_positions
             .setFormat(image_create_info_positions.format)
-            .setImage(*positions_attachment)
+            .setImage(*color_attachment)
             .setViewType(vk::ImageViewType::e2D)
             .setSubresourceRange(image_subresource_range_positions);
 
@@ -495,142 +407,34 @@ int main(int argc, char **argv)
             device->createImageView(image_view_create_info_positions),
             [device](auto iv) { device->destroyImageView(iv); });
 
-        vk::ImageCreateInfo image_create_info_depth;
-        image_create_info_depth.setArrayLayers(1)
-            .setExtent(vk::Extent3D(512, 512, 1))
-            .setFormat(vk::Format::eD32Sfloat)
-            .setImageType(vk::ImageType::e2D)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setMipLevels(1)
-            .setSamples(vk::SampleCountFlagBits::e1)
-            .setSharingMode(vk::SharingMode::eExclusive)
-            .setTiling(vk::ImageTiling::eOptimal)
-            .setUsage(vk::ImageUsageFlagBits::eDepthStencilAttachment);
-
-        vkx::image depth_attachment =
-            vkx::make_handle(device->createImage(image_create_info_depth),
-                             [device](auto img) { device->destroyImage(img); });
-
-        vkx::device_memory depth_attachment_memory =
-            vkx::allocate(device, mem_caps, depth_attachment,
-                          vk::MemoryPropertyFlagBits::eDeviceLocal);
-        device->bindImageMemory(*depth_attachment, *depth_attachment_memory, 0);
-
-        vk::ImageSubresourceRange image_subresource_range_depth;
-        image_subresource_range_depth
-            .setAspectMask(vk::ImageAspectFlagBits::eDepth)
-            .setBaseArrayLayer(0)
-            .setBaseMipLevel(0)
-            .setLayerCount(1)
-            .setLevelCount(1);
-
-        vk::ImageViewCreateInfo image_view_create_info_depth;
-        image_view_create_info_depth.setFormat(image_create_info_depth.format)
-            .setImage(*depth_attachment)
-            .setViewType(vk::ImageViewType::e2D)
-            .setSubresourceRange(image_subresource_range_depth);
-
-        vkx::image_view image_view_depth = vkx::make_handle(
-            device->createImageView(image_view_create_info_depth),
-            [device](auto iv) { device->destroyImageView(iv); });
-
         ////////////////////////////////////////////////////////////////
         //  Pipeline
-        vk::PushConstantRange push_constant_range;
-        push_constant_range
-            .setStageFlags(vk::ShaderStageFlagBits::eVertex |
-                           vk::ShaderStageFlagBits::eFragment)
-            .setOffset(0)
-            .setSize(sizeof(push_constants));
 
         vk::PipelineLayoutCreateInfo pipeline_layout_create_info;
-        pipeline_layout_create_info.setSetLayoutCount(1)
-            .setPSetLayouts(&*descriptor_set_layout)
-            .setPushConstantRangeCount(1)
-            .setPPushConstantRanges(&push_constant_range);
+
         vkx::pipeline_layout pipeline_layout = vkx::make_handle(
             device->createPipelineLayout(pipeline_layout_create_info),
             [device](auto pl) { device->destroyPipelineLayout(pl); });
 
-        std::array<vk::PipelineShaderStageCreateInfo, 3>
+        std::array<vk::PipelineShaderStageCreateInfo, 2>
             pipeline_shader_stage_create_infos;
         pipeline_shader_stage_create_infos[0]
             .setStage(vk::ShaderStageFlagBits::eVertex)
             .setModule(*vertex_shader)
             .setPName("main");
         pipeline_shader_stage_create_infos[1]
-            .setStage(vk::ShaderStageFlagBits::eGeometry)
-            .setModule(*geometry_shader)
-            .setPName("main");
-        pipeline_shader_stage_create_infos[2]
             .setStage(vk::ShaderStageFlagBits::eFragment)
             .setModule(*fragment_shader)
             .setPName("main");
 
-        std::array<vk::VertexInputBindingDescription, 3>
-            vertex_input_binding_descriptions;
-        vertex_input_binding_descriptions[0]
-            .setBinding(0)
-            .setStride(sizeof(glm::vec3))
-            .setInputRate(vk::VertexInputRate::eVertex);
-        vertex_input_binding_descriptions[1]
-            .setBinding(1)
-            .setStride(sizeof(glm::ivec4))
-            .setInputRate(vk::VertexInputRate::eInstance);
-        vertex_input_binding_descriptions[2]
-            .setBinding(2)
-            .setStride(sizeof(glm::mat4))
-            .setInputRate(vk::VertexInputRate::eInstance);
-
-        std::array<vk::VertexInputAttributeDescription, 6>
-            vertex_input_attribute_descriptions;
-        vertex_input_attribute_descriptions[0]
-            .setLocation(0)
-            .setBinding(0)
-            .setFormat(vk::Format::eR32G32B32Sfloat)
-            .setOffset(0);
-        vertex_input_attribute_descriptions[1]
-            .setLocation(1)
-            .setBinding(1)
-            .setFormat(vk::Format::eR32G32B32A32Sint)
-            .setOffset(0);
-        vertex_input_attribute_descriptions[2]
-            .setLocation(2)
-            .setBinding(2)
-            .setFormat(vk::Format::eR32G32B32Sfloat)
-            .setOffset(0);
-        vertex_input_attribute_descriptions[3]
-            .setLocation(3)
-            .setBinding(2)
-            .setFormat(vk::Format::eR32G32B32Sfloat)
-            .setOffset(sizeof(glm::vec4));
-        vertex_input_attribute_descriptions[4]
-            .setLocation(4)
-            .setBinding(2)
-            .setFormat(vk::Format::eR32G32B32Sfloat)
-            .setOffset(2 * sizeof(glm::vec4));
-        vertex_input_attribute_descriptions[5]
-            .setLocation(5)
-            .setBinding(2)
-            .setFormat(vk::Format::eR32G32B32Sfloat)
-            .setOffset(3 * sizeof(glm::vec4));
-
         vk::PipelineVertexInputStateCreateInfo
             pipeline_vertex_input_state_create_info;
-        pipeline_vertex_input_state_create_info
-            .setVertexBindingDescriptionCount(
-                uint32_t(vertex_input_binding_descriptions.size()))
-            .setPVertexBindingDescriptions(
-                vertex_input_binding_descriptions.data())
-            .setVertexAttributeDescriptionCount(
-                uint32_t(vertex_input_attribute_descriptions.size()))
-            .setPVertexAttributeDescriptions(
-                vertex_input_attribute_descriptions.data());
 
         vk::PipelineInputAssemblyStateCreateInfo
             pipeline_input_assembly_state_create_info;
-        pipeline_input_assembly_state_create_info.setTopology(
-            vk::PrimitiveTopology::eTriangleList);
+        pipeline_input_assembly_state_create_info
+            .setTopology(vk::PrimitiveTopology::eTriangleList)
+            .setPrimitiveRestartEnable(VK_FALSE);
 
         vk::Viewport viewport;
         viewport.setX(0)
@@ -649,26 +453,39 @@ int main(int argc, char **argv)
 
         vk::PipelineRasterizationStateCreateInfo
             pipeline_rasterization_state_create_info;
-        pipeline_rasterization_state_create_info.setLineWidth(1.0f);
+        pipeline_rasterization_state_create_info.setDepthClampEnable(VK_FALSE)
+            .setRasterizerDiscardEnable(VK_FALSE)
+            .setPolygonMode(vk::PolygonMode::eFill)
+            .setLineWidth(1.0f)
+            .setCullMode(vk::CullModeFlagBits::eBack)
+            .setFrontFace(vk::FrontFace::eClockwise)
+            .setDepthBiasEnable(VK_FALSE);
 
         vk::PipelineMultisampleStateCreateInfo
             pipeline_multisample_state_create_info;
-
-        vk::PipelineDepthStencilStateCreateInfo
-            pipeline_depth_stencil_state_create_info;
-        pipeline_depth_stencil_state_create_info.setDepthCompareOp(
-            vk::CompareOp::eLess);
+        pipeline_multisample_state_create_info.setSampleShadingEnable(VK_FALSE)
+            .setRasterizationSamples(vk::SampleCountFlagBits::e1);
 
         vk::PipelineColorBlendAttachmentState
             pipeline_color_blend_attachment_state;
+        pipeline_color_blend_attachment_state.setBlendEnable(VK_FALSE)
+            .setColorWriteMask(vk::ColorComponentFlagBits::eA |
+                               vk::ColorComponentFlagBits::eR |
+                               vk::ColorComponentFlagBits::eG |
+                               vk::ColorComponentFlagBits::eB);
+
         vk::PipelineColorBlendStateCreateInfo
             pipeline_color_blend_state_create_info;
-        pipeline_color_blend_state_create_info.setAttachmentCount(1)
-            .setPAttachments(&pipeline_color_blend_attachment_state);
+        pipeline_color_blend_state_create_info.setLogicOpEnable(VK_FALSE)
+            .setLogicOp(vk::LogicOp::eCopy)
+            .setAttachmentCount(1)
+            .setPAttachments(&pipeline_color_blend_attachment_state)
+            .setBlendConstants(std::array<float, 4>{0, 0, 0, 0});
 
         vk::AttachmentDescription attachment_description_position_rt;
         attachment_description_position_rt
             .setFormat(vk::Format::eR32G32B32A32Sfloat)
+            .setSamples(vk::SampleCountFlagBits::e1)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
@@ -680,38 +497,27 @@ int main(int argc, char **argv)
         attachment_reference_position_rt.setAttachment(0).setLayout(
             vk::ImageLayout::eColorAttachmentOptimal);
 
-        vk::AttachmentDescription attachment_description_depth;
-        attachment_description_depth.setFormat(vk::Format::eD32Sfloat)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eStore)
-            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
-            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
-
-        vk::AttachmentReference attachment_reference_depth;
-        attachment_reference_depth.setAttachment(1).setLayout(
-            vk::ImageLayout::eDepthStencilAttachmentOptimal);
-
-        std::array<vk::AttachmentReference, 1> color_attachments = {
-            attachment_reference_position_rt};
-
-        std::array<vk::AttachmentDescription, 2> attachment_descriptions = {
-            attachment_description_position_rt, attachment_description_depth};
-
         vk::SubpassDescription subpass_description;
         subpass_description
             .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-            .setColorAttachmentCount(uint32_t(color_attachments.size()))
-            .setPColorAttachments(color_attachments.data())
-            .setPDepthStencilAttachment(&attachment_reference_depth);
+            .setColorAttachmentCount(1)
+            .setPColorAttachments(&attachment_reference_position_rt);
+
+        vk::SubpassDependency subpass_dependency;
+        subpass_dependency.setSrcSubpass(VK_SUBPASS_EXTERNAL)
+            .setDstSubpass(0)
+            .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+            .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+            .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
+                              vk::AccessFlagBits::eColorAttachmentWrite);
 
         vk::RenderPassCreateInfo render_pass_create_info;
-        render_pass_create_info
-            .setAttachmentCount(uint32_t(attachment_descriptions.size()))
-            .setPAttachments(attachment_descriptions.data())
+        render_pass_create_info.setAttachmentCount(1)
+            .setPAttachments(&attachment_description_position_rt)
             .setSubpassCount(1)
-            .setPSubpasses(&subpass_description);
+            .setPSubpasses(&subpass_description)
+            .setDependencyCount(1)
+            .setPDependencies(&subpass_dependency);
         vkx::render_pass render_pass = vkx::make_handle(
             device->createRenderPass(render_pass_create_info),
             [device](auto rp) { device->destroyRenderPass(rp); });
@@ -719,7 +525,6 @@ int main(int argc, char **argv)
         vk::GraphicsPipelineCreateInfo graphics_pipeline_create_info;
         graphics_pipeline_create_info.setLayout(*pipeline_layout)
             .setPColorBlendState(&pipeline_color_blend_state_create_info)
-            .setPDepthStencilState(&pipeline_depth_stencil_state_create_info)
             .setPInputAssemblyState(&pipeline_input_assembly_state_create_info)
             .setPMultisampleState(&pipeline_multisample_state_create_info)
             .setPRasterizationState(&pipeline_rasterization_state_create_info)
@@ -736,8 +541,7 @@ int main(int argc, char **argv)
 
         ////////////////////////////////////////////////////////////////
         //  Frame buffer
-        std::array<vk::ImageView, 2> image_views = {*image_view_positions,
-                                                    *image_view_depth};
+        std::array<vk::ImageView, 1> image_views = {*image_view_positions};
 
         vk::FramebufferCreateInfo framebuffer_create_info;
         framebuffer_create_info.setAttachmentCount(uint32_t(image_views.size()))
@@ -752,104 +556,27 @@ int main(int argc, char **argv)
             [device](auto fb) { device->destroyFramebuffer(fb); });
 
         ////////////////////////////////////////////////////////////////
-        //  World/View/Projection setup
-        glm::mat4 projection_matrix =
-            glm::perspective(glm::pi<float>() / 3, 1.0f, 0.01f, 5.0f);
-
-        vkx::buffer projection_matrices =
-            create_buffer(vk::BufferUsageFlagBits::eStorageBuffer,
-                          &projection_matrix, sizeof(projection_matrix));
-
-        glm::mat4 view_matrix =
-            glm::inverse(glm::translate(glm::mat4(), glm::vec3(0, 0, -2)));
-
-        vkx::buffer view_matrices =
-            create_buffer(vk::BufferUsageFlagBits::eStorageBuffer, &view_matrix,
-                          sizeof(view_matrix));
-
-        glm::mat4 world_matrix;
-
-        vkx::buffer world_matrices =
-            create_buffer(vk::BufferUsageFlagBits::eVertexBuffer, &world_matrix,
-                          sizeof(world_matrix));
-
-        glm::ivec4 instance_index = {0, 0, 0, 0};
-
-        vkx::buffer instance_indices =
-            create_buffer(vk::BufferUsageFlagBits::eVertexBuffer,
-                          &instance_index, sizeof(instance_index));
-
-        ////////////////////////////////////////////////////////////////
         //  Submit rendering
-        vkx::begin(command_buffer, true);
-
-        command_buffer->bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                     *pipeline);
-        command_buffer->bindVertexBuffers(
-            0, {*vertex_positions, *instance_indices, *world_matrices},
-            {0, 0, 0});
-        command_buffer->bindIndexBuffer(*triangles, 0, vk::IndexType::eUint32);
-
-        vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
-        descriptorSetAllocateInfo.setDescriptorPool(*descriptor_pool)
-            .setDescriptorSetCount(1)
-            .setPSetLayouts(&*descriptor_set_layout);
-        vkx::descriptor_set descriptor_set = vkx::make_handle(
-            device->allocateDescriptorSets(descriptorSetAllocateInfo)[0],
-            [device, descriptor_pool](auto ds) {
-                device->freeDescriptorSets(*descriptor_pool, {ds});
-            });
-
-        vk::DescriptorBufferInfo descriptor_buffer_info_view_matrices;
-        descriptor_buffer_info_view_matrices.setBuffer(*view_matrices)
-            .setOffset(0)
-            .setRange(VK_WHOLE_SIZE);
-        vk::DescriptorBufferInfo descriptor_buffer_info_projection_matrices;
-        descriptor_buffer_info_projection_matrices
-            .setBuffer(*projection_matrices)
-            .setOffset(0)
-            .setRange(VK_WHOLE_SIZE);
-
-        std::array<vk::WriteDescriptorSet, 2> write_descriptor_sets;
-        write_descriptor_sets[0]
-            .setDstSet(*descriptor_set)
-            .setDstBinding(0)
-            .setDstArrayElement(0)
-            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1)
-            .setPBufferInfo(&descriptor_buffer_info_view_matrices);
-        write_descriptor_sets[1]
-            .setDstSet(*descriptor_set)
-            .setDstBinding(1)
-            .setDstArrayElement(0)
-            .setDescriptorType(vk::DescriptorType::eStorageBufferDynamic)
-            .setDescriptorCount(1)
-            .setPBufferInfo(&descriptor_buffer_info_projection_matrices);
-        device->updateDescriptorSets(write_descriptor_sets, {});
-
-        push_constants constants = {{1, 1}, {512.0f, 512.0f}, 0, 0};
-        command_buffer->pushConstants(*pipeline_layout,
-                                      vk::ShaderStageFlagBits::eVertex |
-                                          vk::ShaderStageFlagBits::eFragment,
-                                      0, sizeof(constants), &constants);
-
-        std::array<vk::ClearValue, 2> clear_values;
-        clear_values[0].setColor(
-            vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 0}));
-        clear_values[1].setDepthStencil(vk::ClearDepthStencilValue(1.0f));
-
+        vk::CommandBufferBeginInfo command_buffer_begin_info;
+        command_buffer_begin_info.setFlags(
+            vk::CommandBufferUsageFlagBits::eSimultaneousUse);
+        command_buffer->begin(command_buffer_begin_info);
+        vk::ClearValue clear_value;
+        clear_value.setColor(vk::ClearColorValue());
         vk::RenderPassBeginInfo render_pass_begin_info;
-        render_pass_begin_info.setClearValueCount(uint32_t(clear_values.size()))
-            .setPClearValues(clear_values.data())
+        render_pass_begin_info.setRenderPass(*render_pass)
             .setFramebuffer(*frame_buffer)
-            .setRenderPass(*render_pass)
-            .setRenderArea(vk::Rect2D(vk::Offset2D(), vk::Extent2D(512, 512)));
+            .setRenderArea(vk::Rect2D(vk::Offset2D(), vk::Extent2D(512, 512)))
+            .setClearValueCount(1)
+            .setPClearValues(&clear_value);
+
         command_buffer->beginRenderPass(render_pass_begin_info,
                                         vk::SubpassContents::eInline);
-        command_buffer->drawIndexed(uint32_t(triangle_data.size()), 1, 0, 0, 0);
+        command_buffer->bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);
+        command_buffer->draw(3, 1, 0, 0);
         command_buffer->endRenderPass();
 
-        vkx::end(command_buffer);
+        command_buffer->end();
         vkx::submit(queue, command_buffer, true);
 
         vk::BufferCreateInfo buffer_create_info;
@@ -876,7 +603,7 @@ int main(int argc, char **argv)
             .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
             .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
             .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-            .setImage(*positions_attachment)
+            .setImage(*color_attachment)
             .setSubresourceRange(image_subresource_range)
             .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
                               vk::AccessFlagBits::eColorAttachmentWrite)
@@ -902,7 +629,7 @@ int main(int argc, char **argv)
             .setImageOffset(vk::Offset3D())
             .setImageExtent(vk::Extent3D(512, 512, 1))
             .setImageSubresource(image_subresource_layers);
-        command_buffer->copyImageToBuffer(*positions_attachment,
+        command_buffer->copyImageToBuffer(*color_attachment,
                                           vk::ImageLayout::eTransferSrcOptimal,
                                           *position_map, {buffer_image_copy});
         vkx::end(command_buffer);
