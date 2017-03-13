@@ -695,7 +695,7 @@ int main(int argc, char **argv)
                                      *pipeline);
         std::random_device                    r;
         std::default_random_engine            e1(r());
-        std::uniform_real_distribution<float> uniform_dist(0, 1);
+        std::uniform_real_distribution<float> uniform_dist(0.5f, 1.0f);
         push_constants                        constants;
         std::generate(constants.begin(), constants.end(), [&]() {
             return glm::vec3(uniform_dist(e1), uniform_dist(e1),
