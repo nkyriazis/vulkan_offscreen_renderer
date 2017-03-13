@@ -15,7 +15,6 @@ layout(push_constant) uniform PushConstants {
 	vec3 colors[16];
 } pushConstants;
 
-
 void main() {
 	vec4 offset = vec4(2 * cos(gl_InstanceIndex/5.0f), 2 * sin(gl_InstanceIndex/5.0f), 0, gl_InstanceIndex/100.0f+1.0f);
     gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0) + offset;
