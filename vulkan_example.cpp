@@ -6,8 +6,11 @@
 #include <bitset>
 #include <random>
 #include <vulkan/vulkan.hpp>
+#include <shaderc/shaderc.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#define GLSL(a) std::string(#a)
 
 namespace vkx
 {
@@ -202,6 +205,58 @@ buffer create_buffer(const device &dev, const queue &q,
         device->destroyBuffer(b);
     });
 }
+
+shader_module create_shader(const device &device, vk::ShaderStageFlagBits stage,
+                            const std::string &source)
+{
+    shaderc::CompileOptions compile_options;
+    shaderc::Compiler       compiler;
+
+    shaderc_shader_kind kind;
+
+    switch (stage)
+    {
+    case vk::ShaderStageFlagBits::eVertex:
+        kind = shaderc_shader_kind::shaderc_glsl_vertex_shader;
+        break;
+    case vk::ShaderStageFlagBits::eTessellationControl:
+        kind = shaderc_shader_kind::shaderc_glsl_tess_control_shader;
+        break;
+    case vk::ShaderStageFlagBits::eTessellationEvaluation:
+        kind = shaderc_shader_kind::shaderc_glsl_tess_evaluation_shader;
+        break;
+    case vk::ShaderStageFlagBits::eGeometry:
+        kind = shaderc_shader_kind::shaderc_glsl_geometry_shader;
+        break;
+    case vk::ShaderStageFlagBits::eFragment:
+        kind = shaderc_shader_kind::shaderc_glsl_fragment_shader;
+        break;
+    case vk::ShaderStageFlagBits::eCompute:
+        kind = shaderc_shader_kind::shaderc_glsl_compute_shader;
+        break;
+    default:
+        throw std::runtime_error("unsupported vertex stage");
+    }
+
+    compile_options.SetOptimizationLevel(shaderc_optimization_level_size);
+    shaderc::SpvCompilationResult compilation_result =
+        compiler.CompileGlslToSpv(source, kind, "", compile_options);
+
+    if (compilation_result.GetCompilationStatus() !=
+        shaderc_compilation_status::shaderc_compilation_status_success)
+        throw std::runtime_error(compilation_result.GetErrorMessage());
+
+    vk::ShaderModuleCreateInfo shader_module_create_info_vert;
+    shader_module_create_info_vert
+        .setCodeSize(
+            sizeof(uint32_t) *
+            std::distance(compilation_result.begin(), compilation_result.end()))
+        .setPCode(compilation_result.begin());
+
+    return vkx::make_handle(
+        device->createShaderModule(shader_module_create_info_vert),
+        [device](auto shader) { device->destroyShaderModule(shader); });
+}
 }
 
 using push_constants = std::array<glm::vec3, 16>;
@@ -358,27 +413,42 @@ int main(int argc, char **argv)
 
         ////////////////////////////////////////////////////////////////
         //  Shaders
-        auto vertex_shader_code =
-            vkx::load_binary_file("media/shader.vert.spv");
-        vk::ShaderModuleCreateInfo shader_module_create_info_vert;
-        shader_module_create_info_vert.setCodeSize(vertex_shader_code.size())
-            .setPCode(
-                reinterpret_cast<const uint32_t *>(vertex_shader_code.data()));
+        std::string vertex_shader_glsl_code =
+            std::string("#version 450\n") +
+            GLSL(out gl_PerVertex { vec4 gl_Position; };
 
-        vkx::shader_module vertex_shader = vkx::make_handle(
-            device->createShaderModule(shader_module_create_info_vert),
-            [device](auto shader) { device->destroyShaderModule(shader); });
+                 layout(location = 0) out vec4 fragColor;
 
-        auto fragment_shader_code =
-            vkx::load_binary_file("media/shader.frag.spv");
-        vk::ShaderModuleCreateInfo shader_module_create_info_frag;
-        shader_module_create_info_frag.setCodeSize(fragment_shader_code.size())
-            .setPCode(reinterpret_cast<const uint32_t *>(
-                fragment_shader_code.data()));
+                 layout(set = 0, binding = 0)
+                     buffer verticesDynStorageBuffer { vec2 positions[]; };
 
-        vkx::shader_module fragment_shader = vkx::make_handle(
-            device->createShaderModule(shader_module_create_info_frag),
-            [device](auto shader) { device->destroyShaderModule(shader); });
+                 layout(push_constant)
+                     uniform PushConstants { vec3 colors[16]; } pushConstants;
+
+                 void main() {
+                     vec4 offset = vec4(2 * cos(gl_InstanceIndex / 5.0f),
+                                        2 * sin(gl_InstanceIndex / 5.0f), 0,
+                                        gl_InstanceIndex / 100.0f + 1.0f);
+                     gl_Position =
+                         vec4(positions[gl_VertexIndex], 0.6, 1.0) + offset;
+                     fragColor =
+                         vec4(pushConstants.colors[gl_InstanceIndex % 16], 1);
+                 });
+
+        vkx::shader_module vertex_shader = vkx::create_shader(
+            device, vk::ShaderStageFlagBits::eVertex, vertex_shader_glsl_code);
+
+        std::string fragment_shader_glsl_code =
+            std::string("#version 450\n") +
+            GLSL(layout(location = 0) in vec3 fragColor;
+
+                 layout(location = 0) out vec4 outColor;
+
+                 void main() { outColor = vec4(fragColor, 1.0); });
+
+        vkx::shader_module fragment_shader =
+            vkx::create_shader(device, vk::ShaderStageFlagBits::eFragment,
+                               fragment_shader_glsl_code);
 
         ////////////////////////////////////////////////////////////////
         //  Color/Depth attachments
@@ -679,7 +749,7 @@ int main(int argc, char **argv)
         command_buffer_begin_info.setFlags(
             vk::CommandBufferUsageFlagBits::eSimultaneousUse);
         command_buffer->begin(command_buffer_begin_info);
-        std::array<vk::ClearValue,2> clear_values;
+        std::array<vk::ClearValue, 2> clear_values;
         clear_values[0].setColor(vk::ClearColorValue());
         clear_values[1].setDepthStencil(vk::ClearDepthStencilValue(1));
         vk::RenderPassBeginInfo render_pass_begin_info;
