@@ -206,6 +206,15 @@ buffer create_buffer(const device &dev, const queue &q,
     });
 }
 
+template <typename T>
+buffer create_buffer(const device &dev, const queue &q,
+                     const command_buffer &                    cb,
+                     const vk::PhysicalDeviceMemoryProperties &mem_caps,
+                     vk::BufferUsageFlags flags, const T &data)
+{
+    return create_buffer(dev, q, cb, mem_caps, flags, &data, sizeof(data));
+}
+
 shader_module create_shader(const device &device, vk::ShaderStageFlagBits stage,
                             const std::string &source)
 {
@@ -738,10 +747,9 @@ int main(int argc, char **argv)
         //  Vertex positions dynamic storage buffer
         std::array<glm::vec2, 3> position_data = {
             glm::vec2(0.0, -0.5), glm::vec2(0.5, 0.5), glm::vec2(-0.5, 0.5)};
-        vkx::buffer positions =
-            vkx::create_buffer(device, queue, command_buffer, mem_caps,
-                               vk::BufferUsageFlagBits::eStorageBuffer,
-                               &position_data, sizeof(position_data));
+        vkx::buffer positions = vkx::create_buffer(
+            device, queue, command_buffer, mem_caps,
+            vk::BufferUsageFlagBits::eStorageBuffer, position_data);
 
         ////////////////////////////////////////////////////////////////
         //  Submit rendering
