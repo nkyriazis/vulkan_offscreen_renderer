@@ -872,15 +872,19 @@ int main(int argc, char **argv)
         vkx::end(command_buffer);
         vkx::submit(queue, command_buffer, true);
 
-        void *ptr = device->mapMemory(*position_map_memory, 0,
-                                      512 * 512 * sizeof(glm::vec4));
+        std::shared_ptr<void> mapped_memory(
+            device->mapMemory(*position_map_memory, 0,
+                              512 * 512 * sizeof(glm::vec4)),
+            [device, position_map_memory](const void *ptr) {
+                device->unmapMemory(*position_map_memory);
+            });
         {
             std::ofstream write_image("image.bin", std::ios::binary);
-            write_image.write(reinterpret_cast<const char *>(ptr),
-                              512 * 512 * sizeof(glm::vec4));
+            write_image.write(
+                reinterpret_cast<const char *>(mapped_memory.get()),
+                512 * 512 * sizeof(glm::vec4));
             write_image.close();
         }
-        device->unmapMemory(*position_map_memory);
 
     } // try
     catch (const std::exception &e)
